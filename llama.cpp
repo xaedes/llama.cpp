@@ -1379,8 +1379,10 @@ static bool llama_model_quantize_internal(const std::string & fname_inp, const s
             fout.write((char *) &len, sizeof(len));
 
             word.resize(len);
-            finp.read ((char *) &word[0], len);
-            fout.write((char *) &word[0], len);
+            if (len > 0) {
+                finp.read ((char *) &word[0], len);
+                fout.write((char *) &word[0], len);
+            }
 
             float score;
             finp.read ((char *) &score, sizeof(score));
