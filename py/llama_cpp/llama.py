@@ -1,14 +1,15 @@
 import os
 import sys
+import glob
 import ctypes
 
-from ctypes import c_int, c_float, c_double, c_char_p, c_void_p, c_bool, POINTER, Structure
+from ctypes import c_int, c_float, c_double, c_char_p, c_void_p, c_bool, c_size_t, POINTER, Structure
 
 # Load the library
 if sys.platform == 'win32':
-    lib = ctypes.cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), '..', '..', 'build2', 'bin', 'llama.dll'))
+    lib = ctypes.cdll.LoadLibrary(next(iter(glob.glob(os.path.join(os.path.dirname(__file__), '..', '..', '**', 'llama.dll'), recursive=True))))
 else:
-    lib = ctypes.cdll.LoadLibrary(os.path.join(os.path.dirname(__file__), '..', '..', 'build2', 'bin', 'libllama.so'))
+    lib = ctypes.cdll.LoadLibrary(next(iter(glob.glob(os.path.join(os.path.dirname(__file__), '..', '..', '**', 'libllama.so'), recursive=True))))
 
 # C types
 llama_token = c_int
@@ -22,7 +23,7 @@ class llama_token_data(Structure):
     ]
 
 llama_token_data_p = POINTER(llama_token_data)
-
+llama_progress_callback = ctypes.CFUNCTYPE(None, c_float, c_void_p)
 class llama_context_params(Structure):
     _fields_ = [
         ('n_ctx', c_int), # text context
@@ -33,6 +34,8 @@ class llama_context_params(Structure):
         ('vocab_only', c_bool), # only load the vocabulary, no weights
         ('use_mlock', c_bool), # force system to keep model in RAM
         ('embedding', c_bool), # embedding mode only
+        ('progress_callback', llama_progress_callback), # called with a progress value between 0 and 1, pass NULL to disable
+        ('progress_callback_user_data', c_void_p), # context pointer passed to the progress callback
     ]
 
 llama_context_params_p = POINTER(llama_context_params)
@@ -76,7 +79,7 @@ lib.llama_token_bos.restype = llama_token
 lib.llama_token_eos.argtypes = []
 lib.llama_token_eos.restype = llama_token
 
-lib.llama_sample_top_p_top_k.argtypes = [llama_context_p, llama_token_p, c_int, c_int, c_double, c_double, c_double]
+lib.llama_sample_top_p_top_k.argtypes = [llama_context_p, llama_token_p, c_int, c_int, c_float, c_float, c_float]
 lib.llama_sample_top_p_top_k.restype = llama_token
 
 lib.llama_print_timings.argtypes = [llama_context_p]
@@ -87,6 +90,15 @@ lib.llama_reset_timings.restype = None
 
 lib.llama_print_system_info.argtypes = []
 lib.llama_print_system_info.restype = c_char_p
+
+lib.llama_get_kv_cache_data.argtypes = [llama_context_p]
+lib.llama_get_kv_cache_data.restype = c_void_p
+
+lib.llama_get_kv_cache_size.argtypes = [llama_context_p]
+lib.llama_get_kv_cache_size.restype = c_size_t
+
+lib.llama_set_kv_cache_data.argtypes = [llama_context_p, c_void_p]
+lib.llama_set_kv_cache_data.restype = None
 
 # Python functions
 def llama_context_default_params() -> llama_context_params:
@@ -145,7 +157,7 @@ def llama_token_bos() -> llama_token:
 def llama_token_eos() -> llama_token:
     return lib.llama_token_eos()
 
-def llama_sample_top_p_top_k(ctx: llama_context_p, last_n_tokens_data: llama_token_p, last_n_tokens_size: c_int, top_k: c_int, top_p: c_double, temp: c_double, repeat_penalty: c_double) -> llama_token:
+def llama_sample_top_p_top_k(ctx: llama_context_p, last_n_tokens_data: llama_token_p, last_n_tokens_size: c_int, top_k: c_int, top_p: c_float, temp: c_float, repeat_penalty: c_float) -> llama_token:
     return lib.llama_sample_top_p_top_k(ctx, last_n_tokens_data, last_n_tokens_size, top_k, top_p, temp, repeat_penalty)
 
 def llama_print_timings(ctx: llama_context_p):
@@ -157,3 +169,12 @@ def llama_reset_timings(ctx: llama_context_p):
 def llama_print_system_info() -> str:
     """Print system informaiton"""
     return lib.llama_print_system_info().decode('utf-8')
+
+def llama_get_kv_cache_data(ctx: llama_context_p) -> c_void_p:
+    return lib.llama_get_kv_cache_data(ctx)
+
+def llama_get_kv_cache_size(ctx: llama_context_p) -> c_size_t:
+    return lib.llama_get_kv_cache_size(ctx)
+
+def llama_set_kv_cache_data(ctx: llama_context_p, data: c_void_p):
+    return lib.llama_set_kv_cache_data(ctx, data)
