@@ -21,7 +21,7 @@ endif()
 
 target_include_directories(${TARGET} PUBLIC .)
 target_compile_features(${TARGET} PUBLIC cxx_std_11)
-target_link_libraries(${TARGET} PRIVATE llama)
+target_link_libraries(${TARGET} PUBLIC ggml llama)
 
 # examples
 
