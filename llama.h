@@ -55,6 +55,7 @@ extern "C" {
         bool f16_kv;     // use fp16 for KV cache
         bool logits_all; // the llama_eval() call computes all logits, not just the last one
         bool vocab_only; // only load the vocabulary, no weights
+        bool use_mmap;   // use mmap if possible
         bool use_mlock;  // force system to keep model in RAM
         bool embedding;  // embedding mode only
 
@@ -65,6 +66,9 @@ extern "C" {
     };
 
     LLAMA_API struct llama_context_params llama_context_default_params();
+
+    LLAMA_API bool llama_mmap_supported();
+    LLAMA_API bool llama_mlock_supported();
 
     // Various functions for loading a ggml llama model.
     // Allocate (almost) all memory needed for the model.
@@ -82,6 +86,23 @@ extern "C" {
             const char * fname_inp,
             const char * fname_out,
                    int   itype);
+
+    // Returns the KV cache that will contain the context for the
+    // ongoing prediction with the model.
+    LLAMA_API const uint8_t * llama_get_kv_cache(struct llama_context * ctx);
+
+    // Returns the size of the KV cache
+    LLAMA_API size_t llama_get_kv_cache_size(struct llama_context * ctx);
+
+    // Returns the number of tokens in the KV cache
+    LLAMA_API int llama_get_kv_cache_token_count(struct llama_context * ctx);
+
+    // Sets the KV cache containing the current context for the model
+    LLAMA_API void llama_set_kv_cache(
+            struct llama_context * ctx,
+                   const uint8_t * kv_cache,
+                          size_t   n_size,
+                             int   n_token_count);
 
     // Run the llama inference to obtain the logits and probabilities for the next token.
     // tokens + n_tokens is the provided batch of new tokens to process
@@ -154,4 +175,4 @@ extern "C" {
 }
 #endif
 
-#endif
+#endif // LLAMA_H
