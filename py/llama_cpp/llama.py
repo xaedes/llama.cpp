@@ -3,7 +3,9 @@ import sys
 import glob
 import ctypes
 
-from ctypes import c_int, c_float, c_double, c_char_p, c_void_p, c_bool, POINTER, Structure
+from ctypes import c_ubyte, c_int, c_float, c_double, c_char_p, c_void_p, c_bool, c_size_t, POINTER, Structure
+
+c_ubyte_p = POINTER(c_ubyte)
 
 
 # Load the library
@@ -97,6 +99,18 @@ lib.llama_reset_timings.restype = None
 lib.llama_print_system_info.argtypes = []
 lib.llama_print_system_info.restype = c_char_p
 
+lib.llama_get_kv_cache.argtypes = [llama_context_p]
+lib.llama_get_kv_cache.restype = c_ubyte_p
+
+lib.llama_get_kv_cache_size.argtypes = [llama_context_p]
+lib.llama_get_kv_cache_size.restype = c_size_t
+
+lib.llama_get_kv_cache_token_count.argtypes = [llama_context_p]
+lib.llama_get_kv_cache_token_count.restype = c_int
+
+lib.llama_set_kv_cache.argtypes = [llama_context_p, c_ubyte_p, c_size_t, c_int]
+lib.llama_set_kv_cache.restype = None
+
 # Python functions
 def llama_context_default_params() -> llama_context_params:
     params = lib.llama_context_default_params()
@@ -171,3 +185,15 @@ def llama_reset_timings(ctx: llama_context_p):
 def llama_print_system_info() -> str:
     """Print system informaiton"""
     return lib.llama_print_system_info().decode('utf-8')
+
+def llama_get_kv_cache(ctx: llama_context_p) -> c_ubyte_p:
+    return lib.llama_get_kv_cache(ctx)
+
+def llama_get_kv_cache_size(ctx: llama_context_p) -> c_size_t:
+    return lib.llama_get_kv_cache_size(ctx)
+
+def llama_get_kv_cache_token_count(ctx: llama_context_p) -> c_int:
+    return lib.llama_get_kv_cache_token_count(ctx)
+
+def llama_set_kv_cache(ctx: llama_context_p, data: c_ubyte_p, n_size:c_size_t, n_token_count:c_int):
+    return lib.llama_set_kv_cache(ctx, data, n_size, n_token_count)
