@@ -149,7 +149,7 @@ def llama_get_logits(ctx: llama_context_p):
 
 def llama_token_to_str(ctx: llama_context_p, token: int) -> str:
     """Token Id -> String. Uses the vocabulary in the provided context"""
-    return lib.llama_token_to_str(ctx, token).decode('utf-8')
+    return lib.llama_token_to_str(ctx, token).decode('ascii', errors='ignore')
 
 def llama_token_bos() -> llama_token:
     return lib.llama_token_bos()
