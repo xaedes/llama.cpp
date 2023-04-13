@@ -1923,18 +1923,6 @@ const char * llama_print_system_info(void) {
     return s.c_str();
 }
 
-void * llama_get_kv_cache_data(struct llama_context * ctx) {
-    return ctx->model.kv_self.buf.data();
-}
-
-size_t llama_get_kv_cache_size(struct llama_context * ctx) {
-    return ctx->model.kv_self.buf.size();
-}
-
-void llama_set_kv_cache_data(struct llama_context * ctx, const void * data) {
-    memcpy(ctx->model.kv_self.buf.data(), data, ctx->model.kv_self.buf.size() * sizeof(uint8_t));
-}
-
 // For internal test use
 std::vector<std::pair<std::string, struct ggml_tensor *>>& llama_internal_get_tensor_map(struct llama_context * ctx) {
     return ctx->model.tensors_by_name;

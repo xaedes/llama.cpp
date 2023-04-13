@@ -166,11 +166,6 @@ extern "C" {
     // Print system information
     LLAMA_API const char * llama_print_system_info(void);
 
-    // Access kv_cache
-    LLAMA_API void * llama_get_kv_cache_data(struct llama_context * ctx);
-    LLAMA_API size_t llama_get_kv_cache_size(struct llama_context * ctx);
-    LLAMA_API void llama_set_kv_cache_data(struct llama_context * ctx, const void * data);
-
 #ifdef __cplusplus
 }
 #endif
