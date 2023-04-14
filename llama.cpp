@@ -20,6 +20,7 @@
 #include <climits>
 #include <memory>
 #include <algorithm>
+#include <initializer_list>
 #include <sstream>
 
 
