@@ -113,14 +113,14 @@ extern "C" {
                           size_t   n_size,
                              int   n_token_count);
 
-    // Returns the size of the state
+    // Returns the size of the state (rng, logits, embedding and kv_cache)
     LLAMA_API size_t llama_get_state_size(struct llama_context * ctx);
 
     // Copies the state to the specified destination address
     // Returns the number of bytes copied
     LLAMA_API size_t llama_copy_state_data(struct llama_context * ctx, uint8_t * dest);
 
-    // Copies the state to the specified destination address
+    // Set the state reading from the specified address
     // Returns the number of bytes read
     LLAMA_API size_t llama_set_state_data(struct llama_context * ctx, const uint8_t * src);
 
