@@ -1,3 +1,8 @@
+// Defines sigaction on msys:
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "common.h"
 #include "llama.h"
 
@@ -163,7 +168,7 @@ int main(int argc, char ** argv) {
     }
 
     // enable interactive mode if reverse prompt or interactive start is specified
-    if (params.antiprompt.size() != 0 || params.interactive_start) { 
+    if (params.antiprompt.size() != 0 || params.interactive_start) {
         params.interactive = true;
     }
 
