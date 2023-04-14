@@ -105,6 +105,15 @@ lib.llama_get_kv_cache_token_count.restype = c_int
 lib.llama_set_kv_cache.argtypes = [llama_context_p, c_ubyte_p, c_size_t, c_int]
 lib.llama_set_kv_cache.restype = None
 
+lib.llama_get_state_size.argtypes = [llama_context_p]
+lib.llama_get_state_size.restype = c_size_t
+
+lib.llama_copy_state_data.argtypes = [llama_context_p, c_ubyte_p]
+lib.llama_copy_state_data.restype = c_size_t
+
+lib.llama_set_state_data.argtypes = [llama_context_p, c_ubyte_p]
+lib.llama_set_state_data.restype = c_size_t
+
 # Python functions
 def llama_context_default_params() -> llama_context_params:
     params = lib.llama_context_default_params()
@@ -186,3 +195,12 @@ def llama_get_kv_cache_token_count(ctx: llama_context_p) -> c_int:
 
 def llama_set_kv_cache(ctx: llama_context_p, data: c_ubyte_p, n_size:c_size_t, n_token_count:c_int):
     return lib.llama_set_kv_cache(ctx, data, n_size, n_token_count)
+
+def llama_get_state_size(ctx: llama_context_p) -> c_size_t:
+    return lib.llama_get_state_size(ctx)
+
+def llama_copy_state_data(ctx: llama_context_p, dst: c_ubyte_p) -> c_size_t:
+    return lib.llama_copy_state_data(ctx, dst)
+
+def llama_set_state_data(ctx: llama_context_p, src: c_ubyte_p) -> c_size_t:
+    return lib.llama_set_state_data(ctx, src)
