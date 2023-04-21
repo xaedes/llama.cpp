@@ -73,6 +73,9 @@ lib.llama_n_ctx.restype = c_int
 lib.llama_get_logits.argtypes = [llama_context_p]
 lib.llama_get_logits.restype = POINTER(c_float)
 
+lib.llama_get_embeddings.argtypes = [llama_context_p]
+lib.llama_get_embeddings.restype = POINTER(c_float)
+
 lib.llama_token_to_str.argtypes = [llama_context_p, llama_token]
 lib.llama_token_to_str.restype = c_char_p
 
@@ -161,6 +164,11 @@ def llama_get_logits(ctx: llama_context_p):
     Rows: n_tokens
     Cols: n_vocab"""
     return lib.llama_get_logits(ctx)
+
+def llama_get_embeddings(ctx: llama_context_p):
+    """Get the embeddings for the input
+    shape: [n_embd] (1-dimensional)"""
+    return lib.llama_get_embeddings(ctx)
 
 def llama_token_to_str(ctx: llama_context_p, token: int) -> str:
     """Token Id -> String. Uses the vocabulary in the provided context"""
