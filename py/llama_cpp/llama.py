@@ -34,6 +34,7 @@ class llama_context_params(Structure):
         ('f16_kv', c_bool), # use fp16 for KV cache
         ('logits_all', c_bool), # the llama_eval() call computes all logits, not just the last one
         ('vocab_only', c_bool), # only load the vocabulary, no weights
+        ('use_mmap', c_bool), # use mmap if possible
         ('use_mlock', c_bool), # force system to keep model in RAM
         ('embedding', c_bool), # embedding mode only
         ('progress_callback', llama_progress_callback), # called with a progress value between 0 and 1, pass NULL to disable
