@@ -1,6 +1,5 @@
 #include "ggml.h"
 
-#define LLAMA_API_INTERNAL
 #include "llama.h"
 
 #include <algorithm>
