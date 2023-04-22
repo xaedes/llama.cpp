@@ -219,6 +219,7 @@ enum ggml_op {
 
     GGML_OP_DUP,
     GGML_OP_ADD,
+    GGML_OP_ADD_AT,
     GGML_OP_SUB,
     GGML_OP_MUL,
     GGML_OP_DIV,
@@ -439,6 +440,18 @@ struct ggml_tensor * ggml_add_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b);
+
+struct ggml_tensor * ggml_add_at(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        size_t                offset);
+
+struct ggml_tensor * ggml_add_at_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        size_t                offset);
 
 struct ggml_tensor * ggml_sub(
         struct ggml_context * ctx,
