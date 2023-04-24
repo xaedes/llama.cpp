@@ -182,7 +182,7 @@ extern "C" {
 #define GGML_MAX_PARAMS        16
 #define GGML_MAX_CONTEXTS      64
 #define GGML_MAX_OPT           4
-#define GGML_DEFAULT_N_THREADS 4
+#define GGML_DEFAULT_N_THREADS 1
 
 #ifdef __ARM_NEON
 // we use the built-in 16-bit float type
