@@ -708,10 +708,9 @@ struct ggml_tensor * ggml_rope_inplace(
         int                   n_dims,
         int                   mode);
 
-// rotary position embedding backward, i.e compute dx
+// rotary position embedding backward, i.e compute dx from dy
 struct ggml_tensor * ggml_rope_back(
         struct ggml_context * ctx,
-        struct ggml_tensor  * x,
         struct ggml_tensor  * dy,
         int                   n_past,
         int                   n_dims,
