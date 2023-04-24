@@ -251,6 +251,7 @@ enum ggml_op {
     GGML_OP_PERMUTE,
     GGML_OP_TRANSPOSE,
     GGML_OP_GET_ROWS,
+    GGML_OP_GET_ROWS_BACK,
     GGML_OP_DIAG_MASK_INF,
     GGML_OP_DIAG_MASK_ZERO,
     GGML_OP_SOFT_MAX,
@@ -651,6 +652,11 @@ struct ggml_tensor * ggml_transpose(
         struct ggml_tensor  * a);
 
 struct ggml_tensor * ggml_get_rows(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b);
+
+struct ggml_tensor * ggml_get_rows_back(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b);
