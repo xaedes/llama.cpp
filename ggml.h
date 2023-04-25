@@ -703,8 +703,7 @@ struct ggml_tensor * ggml_rope(
         struct ggml_tensor  * a,
         int                   n_past,
         int                   n_dims,
-        int                   mode,
-        bool                  inplace);
+        int                   mode);
 
 // in-place, returns view(a)
 struct ggml_tensor * ggml_rope_inplace(
