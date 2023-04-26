@@ -252,6 +252,7 @@ enum ggml_op {
     GGML_OP_TRANSPOSE,
     GGML_OP_GET_ROWS,
     GGML_OP_GET_ROWS_BACK,
+    GGML_OP_DIAG,
     GGML_OP_DIAG_MASK_INF,
     GGML_OP_DIAG_MASK_ZERO,
     GGML_OP_SOFT_MAX,
@@ -660,6 +661,12 @@ struct ggml_tensor * ggml_get_rows_back(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         struct ggml_tensor  * b);
+
+struct ggml_tensor * ggml_diag(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int64_t               ne0,
+        int64_t               ne1);
 
 // set elements above the diagonal to -INF
 struct ggml_tensor * ggml_diag_mask_inf(
