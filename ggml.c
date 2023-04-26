@@ -9180,6 +9180,9 @@ static void ggml_compute_forward_mul_mat_q_f32(
     }
 #endif
 
+    // static size_t total_elem = 0;
+    // static size_t total_elem_skipped = 0;
+    // static bool printed = false;
     if (params->type == GGML_TASK_INIT) {
         char * wdata = params->wdata;
         const size_t row_size = ne10*GGML_TYPE_SIZE[GGML_TYPE_Q8_0]/GGML_BLCK_SIZE[GGML_TYPE_Q8_0];
@@ -9192,11 +9195,18 @@ static void ggml_compute_forward_mul_mat_q_f32(
                 }
             }
         }
-
+        // total_elem = 0;
+        // total_elem_skipped = 0;
+        // printed = false;
         return;
     }
 
     if (params->type == GGML_TASK_FINALIZE) {
+        // if (!printed && total_elem > 0) {
+        //     float ratio = (double)(total_elem_skipped) / (double)(total_elem);
+        //     printf("%s: skipped %f %d/%d %%\n", __func__, 100*ratio, total_elem_skipped, total_elem);
+        //     printed = true;
+        // }
         return;
     }
 
@@ -9215,7 +9225,13 @@ static void ggml_compute_forward_mul_mat_q_f32(
     void * wdata = params->wdata;
     const size_t row_size = ne00*GGML_TYPE_SIZE[GGML_TYPE_Q8_0]/GGML_BLCK_SIZE[GGML_TYPE_Q8_0];
 
+    // if (ir1-ir0>1) {
+        // printf("%s: %d\n", __func__, ir1-ir0);
+    // }
+    int m = (0b0010000000000000 | 0b1000000000);
+    int skipped = 0;
     for (int ir = ir0; ir < ir1; ++ir) {
+        if ((ir & m) == m) { ++skipped; continue; }
         // src0 indices
         const int i03 = ir/(ne02*ne01);
         const int i02 = (ir - i03*ne02*ne01)/ne01;
@@ -9234,12 +9250,15 @@ static void ggml_compute_forward_mul_mat_q_f32(
         float * dst_col = (float *) ((char *) dst->data + (i0*nb0 + 0*nb1 + i2*nb2 + i3*nb3));
 
         assert(ne00 % 32 == 0);
-
         for (int64_t ic = 0; ic < ne11; ++ic) {
             vec_dot_q(ne00, &dst_col[ic*ne0], src0_row, (void *) (src1_col + ic*row_size));
         }
     }
-
+    // total_elem += ne00*(ir1-ir0);
+    // total_elem_skipped += ne00*skipped;
+    // if ((float)(skipped*100) / (float)(ir1-ir0) > 10) {
+        // printf("%s: skipped %f %d/%d %d/%d %%\n", __func__, (float)(skipped*100) / (float)(ir1-ir0), skipped, ir1-ir0, ne00*skipped, ne00*(ir1-ir0));
+    // }
     //int64_t t1 = ggml_time_us();
     //static int64_t acc = 0;
     //acc += t1 - t0;
