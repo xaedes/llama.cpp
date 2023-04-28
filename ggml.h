@@ -660,7 +660,8 @@ struct ggml_tensor * ggml_get_rows(
 struct ggml_tensor * ggml_get_rows_back(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        struct ggml_tensor  * b);
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * c);
 
 struct ggml_tensor * ggml_diag(
         struct ggml_context * ctx,
