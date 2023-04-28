@@ -7304,6 +7304,8 @@ static void ggml_compute_forward_add_at_f32(
     // GGML_ASSERT(ggml_are_same_shape(src0, src1)); // TODO: assert that offset+len(src1) <= len(src1)
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
+    ggml_compute_forward_dup_same_cont(params, src0, dst);
+
     if (params->type == GGML_TASK_INIT || params->type == GGML_TASK_FINALIZE) {
         return;
     }
@@ -7363,6 +7365,8 @@ static void ggml_compute_forward_add_at_f16_f32(
     // GGML_ASSERT(ggml_are_same_shape(src0, src1)); // TODO: assert that offset+len(src1) <= len(src1)
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
+    ggml_compute_forward_dup_same_cont(params, src0, dst);
+
     if (params->type == GGML_TASK_INIT || params->type == GGML_TASK_FINALIZE) {
         return;
     }
@@ -7414,6 +7418,8 @@ static void ggml_compute_forward_add_at_f16_f16(
     // GGML_ASSERT(ggml_are_same_shape(src0, src1)); // TODO: assert that offset+len(src1) <= len(src1)
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
 
+    ggml_compute_forward_dup_same_cont(params, src0, dst);
+
     if (params->type == GGML_TASK_INIT || params->type == GGML_TASK_FINALIZE) {
         return;
     }
@@ -7464,6 +7470,8 @@ static void ggml_compute_forward_add_at_q_f32(
         size_t offset) {
     // GGML_ASSERT(ggml_are_same_shape(src0, src1)); // TODO: assert that offset+len(src1) <= len(src1)
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
+
+    ggml_compute_forward_dup_same_cont(params, src0, dst);
 
     if (params->type == GGML_TASK_INIT || params->type == GGML_TASK_FINALIZE) {
         return;
@@ -7573,7 +7581,6 @@ static void ggml_compute_forward_add_at(
         struct ggml_tensor * dst) {
     size_t offset;
     memcpy(&offset, dst->padding, sizeof(offset));
-    ggml_compute_forward_dup_same_cont(params, src0, dst);
     switch (src0->type) {
         case GGML_TYPE_F32:
             {
