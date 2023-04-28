@@ -12934,6 +12934,9 @@ void ggml_graph_compute(struct ggml_context * ctx, struct ggml_cgraph * cgraph) 
                 case GGML_OP_SUB:
                 case GGML_OP_MUL:
                 case GGML_OP_DIV:
+                    {
+                        node->n_tasks = n_threads;
+                    } break;
                 case GGML_OP_SQR:
                 case GGML_OP_SQRT:
                 case GGML_OP_SUM:
