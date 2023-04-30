@@ -227,6 +227,7 @@ enum ggml_op {
     GGML_OP_SQR,
     GGML_OP_SQRT,
     GGML_OP_SUM,
+    GGML_OP_SUM_ROWS,
     GGML_OP_MEAN,
     GGML_OP_REPEAT,
     GGML_OP_ABS,
@@ -495,8 +496,12 @@ struct ggml_tensor * ggml_sqrt(
         struct ggml_tensor  * a);
 
 // return scalar
-// TODO: compute sum along rows
 struct ggml_tensor * ggml_sum(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a);
+
+// sums along rows, with input shape [a,b,c,d] return shape [1,b,c,d]
+struct ggml_tensor * ggml_sum_rows(
         struct ggml_context * ctx,
         struct ggml_tensor  * a);
 
