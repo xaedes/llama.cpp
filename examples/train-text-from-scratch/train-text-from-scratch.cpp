@@ -308,31 +308,133 @@ void init_model(struct my_llama_model * model) {
     }
 }
 
-void set_param_model(struct my_llama_model * model) {
-    const auto& hparams = model->hparams;
+struct ggml_tensor * empty_like(struct ggml_context * ctx, struct ggml_tensor * tensor) {
+    struct ggml_tensor empty = *tensor;
+    empty.data = NULL;
+    return ggml_view_tensor(ctx, &empty);
+}
 
+void set_param(struct ggml_tensor * tensor, struct ggml_tensor * grad) {
+    tensor->is_param = true;
+    tensor->grad = grad;
+}
+
+void unset_param(struct ggml_tensor * tensor) {
+    tensor->is_param = false;
+    tensor->grad = NULL;
+}
+
+int set_unset_param(struct ggml_tensor * tensor, struct ggml_tensor * grad, bool enabled) {
+    tensor->is_param = enabled;
+    tensor->grad = enabled ? grad : NULL;
+    return enabled ? 1 : 0;
+}
+
+void create_empty_model_grads(struct ggml_context * ctx, struct my_llama_model * model, struct my_llama_model * grads) {
+    const auto& hparams = model->hparams;
     const uint32_t n_layer = hparams.n_layer;
 
-    struct ggml_context* ctx = model->ctx;
+    grads->ctx = ctx;
+    grads->tok_embeddings = empty_like(ctx, model->tok_embeddings);
+    grads->norm           = empty_like(ctx, model->norm);
+    grads->output         = empty_like(ctx, model->output);
 
-    ggml_set_param(ctx, model->tok_embeddings);
-    ggml_set_param(ctx, model->norm);
-    ggml_set_param(ctx, model->output);
-
+    grads->layers.resize(n_layer);
     for (uint32_t i = 0; i < n_layer; ++i) {
-        auto & layer = model->layers[i];
+        auto & mlayer = model->layers.at(i);
+        auto & glayer = grads->layers.at(i);
 
-        ggml_set_param(ctx, layer.attention_norm);
-        ggml_set_param(ctx, layer.wq);
-        ggml_set_param(ctx, layer.wk);
-        ggml_set_param(ctx, layer.wv);
-        ggml_set_param(ctx, layer.wo);
-        ggml_set_param(ctx, layer.ffn_norm);
-        ggml_set_param(ctx, layer.w1);
-        ggml_set_param(ctx, layer.w2);
-        ggml_set_param(ctx, layer.w3);
+        glayer.attention_norm = empty_like(ctx, mlayer.attention_norm);
+        glayer.wq             = empty_like(ctx, mlayer.wq);
+        glayer.wk             = empty_like(ctx, mlayer.wk);
+        glayer.wv             = empty_like(ctx, mlayer.wv);
+        glayer.wo             = empty_like(ctx, mlayer.wo);
+        glayer.ffn_norm       = empty_like(ctx, mlayer.ffn_norm);
+        glayer.w1             = empty_like(ctx, mlayer.w1);
+        glayer.w2             = empty_like(ctx, mlayer.w2);
+        glayer.w3             = empty_like(ctx, mlayer.w3);
     }
 }
+
+void set_param_model(struct my_llama_model * model, struct my_llama_model * grads) {
+    const auto& hparams = model->hparams;
+    const uint32_t n_layer = hparams.n_layer;
+
+    struct ggml_context * ctx = model->ctx;
+
+    set_param(model->tok_embeddings, grads->tok_embeddings);
+    set_param(model->norm,           grads->norm);
+    set_param(model->output,         grads->output);
+
+    for (uint32_t i = 0; i < n_layer; ++i) {
+        auto & mlayer = model->layers[i];
+        auto & glayer = grads->layers[i];
+
+        set_param(mlayer.attention_norm, glayer.attention_norm);
+        set_param(mlayer.wq,             glayer.wq);
+        set_param(mlayer.wk,             glayer.wk);
+        set_param(mlayer.wv,             glayer.wv);
+        set_param(mlayer.wo,             glayer.wo);
+        set_param(mlayer.ffn_norm,       glayer.ffn_norm);
+        set_param(mlayer.w1,             glayer.w1);
+        set_param(mlayer.w2,             glayer.w2);
+        set_param(mlayer.w3,             glayer.w3);
+    }
+}
+
+void unset_param_model(struct my_llama_model * model) {
+    const auto& hparams = model->hparams;
+    const uint32_t n_layer = hparams.n_layer;
+
+    struct ggml_context * ctx = model->ctx;
+
+    unset_param(model->tok_embeddings);
+    unset_param(model->norm);
+    unset_param(model->output);
+
+    for (uint32_t i = 0; i < n_layer; ++i) {
+        auto & mlayer = model->layers[i];
+
+        unset_param(mlayer.attention_norm);
+        unset_param(mlayer.wq);
+        unset_param(mlayer.wk);
+        unset_param(mlayer.wv);
+        unset_param(mlayer.wo);
+        unset_param(mlayer.ffn_norm);
+        unset_param(mlayer.w1);
+        unset_param(mlayer.w2);
+        unset_param(mlayer.w3);
+    }
+}
+
+int random_set_param_model(struct my_llama_model * model, struct my_llama_model * grads, float prob) {
+    const auto& hparams = model->hparams;
+    const uint32_t n_layer = hparams.n_layer;
+
+    struct ggml_context * ctx = model->ctx;
+
+    int num_set = 0;
+    num_set += set_unset_param(model->tok_embeddings, grads->tok_embeddings, frand() >= prob);
+    num_set += set_unset_param(model->norm,           grads->norm,           frand() >= prob);
+    num_set += set_unset_param(model->output,         grads->output,         frand() >= prob);
+
+    for (uint32_t i = 0; i < n_layer; ++i) {
+        auto & mlayer = model->layers[i];
+        auto & glayer = grads->layers[i];
+
+        num_set += set_unset_param(mlayer.attention_norm, glayer.attention_norm, frand() >= prob);
+        num_set += set_unset_param(mlayer.wq,             glayer.wq,             frand() >= prob);
+        num_set += set_unset_param(mlayer.wk,             glayer.wk,             frand() >= prob);
+        num_set += set_unset_param(mlayer.wv,             glayer.wv,             frand() >= prob);
+        num_set += set_unset_param(mlayer.wo,             glayer.wo,             frand() >= prob);
+        num_set += set_unset_param(mlayer.ffn_norm,       glayer.ffn_norm,       frand() >= prob);
+        num_set += set_unset_param(mlayer.w1,             glayer.w1,             frand() >= prob);
+        num_set += set_unset_param(mlayer.w2,             glayer.w2,             frand() >= prob);
+        num_set += set_unset_param(mlayer.w3,             glayer.w3,             frand() >= prob);
+    }
+    return num_set;
+}
+
 
 void randomize_model(struct my_llama_model * model, int seed, float mean, float std, float min, float max) {
     const auto & hparams = model->hparams;
@@ -2135,6 +2237,12 @@ struct train_params get_default_train_params() {
     params.fn_checkpoint_out = "checkpoint.bin";
     params.fn_model_out      = "ggml-checkpoint-f32.bin";
 
+    params.fn_vocab_model    = "ggml-checkpoint-ggmlc-256x16.f32.bin";
+    params.fn_train_data     = "opt-forward.dot";
+    params.fn_checkpoint_in  = "checkpoint.bin";
+    params.fn_checkpoint_out = "checkpoint.bin";
+    params.fn_model_out      = "ggml-checkpoint-f32.bin";
+
     params.seed       =   -1;
 
     params.n_ctx      =  128;
@@ -2468,6 +2576,7 @@ int main(int argc, char ** argv) {
     printf("%s: number of training tokens: %d\n", __func__, train_tokens.size());
 
     struct my_llama_model model;
+    struct my_llama_model empty_grads;
     model.hparams.n_vocab = llama_n_vocab(lctx);
     model.hparams.n_ctx   = params.n_ctx;
     model.hparams.n_embd  = params.n_embd;
@@ -2537,7 +2646,8 @@ int main(int argc, char ** argv) {
 
     printf("%s: init model\n", __func__);
     bool existed = load_checkpoint(&model, opt, params.fn_checkpoint_in, true);
-    set_param_model(&model);
+    create_empty_model_grads(model.ctx, &model, &empty_grads);
+    set_param_model(&model, &empty_grads);
 
     opt->params = params.use_adam ? opt_params_adam : opt_params_lbfgs;
 
@@ -2599,6 +2709,13 @@ int main(int argc, char ** argv) {
 
         ggml_cgraph gf = {};
         gf.n_threads = params.n_threads;
+
+        int max_tries = 16;
+        for (int i=0; i<max_tries; ++i) {
+            if (random_set_param_model(&model, &empty_grads, 0.05) > 0) {
+                break;
+            }
+        }
 
         get_example_targets_batch(lctx, train_samples.data(), train_samples.size(), train_tokens.data(), train_tokens.size(), ex,  tokens_input, target_logits, target_probs);
 
