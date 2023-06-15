@@ -1164,6 +1164,7 @@ extern "C" {
             float eps;   // epsilon for numerical stability
             float eps_f; // epsilon for convergence test
             float eps_g; // epsilon for convergence test
+            float gclip; // gradient clipping
         } adam;
 
         // LBFGS parameters
