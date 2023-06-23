@@ -4,6 +4,10 @@
 #include <random>
 #include <cstring>
 
+#if defined(_MSC_VER)
+#pragma warning(disable: 4244 4267) // possible loss of data
+#endif
+
 float frand() {
     return (float)rand()/(float)RAND_MAX;
 }
@@ -153,8 +157,8 @@ struct llama_hparams_lora {
     uint32_t n_rot   = 64;
     uint32_t n_lora  = 64;
 
-    bool operator!=(const llama_hparams & other) const {
-        return memcmp(this, &other, sizeof(llama_hparams));
+    bool operator!=(const llama_hparams_lora & other) const {
+        return memcmp(this, &other, sizeof(llama_hparams_lora)) != 0;
     }
 };
 
@@ -1470,7 +1474,7 @@ struct ggml_tensor * square_error_loss(struct ggml_context * ctx, struct ggml_te
 }
 
 struct ggml_tensor * cross_entropy_loss(struct ggml_context * ctx, struct ggml_tensor * a, struct ggml_tensor * b) {
-    const float eps = 1e-3;
+    const float eps = 1e-3f;
     return
         ggml_sum(ctx,
             ggml_neg(ctx,
