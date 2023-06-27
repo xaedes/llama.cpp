@@ -3966,12 +3966,12 @@ int main(int argc, char ** argv) {
             logits = forward_batch_wo_cache_flash_attn(&model, ctx0, gf, tokens_input, n_tokens, n_batch);
             loss   = cross_entropy_loss(ctx0, logits, target_probs);
             ggml_build_forward_expand(gf, loss);
-            *gb = ggml_build_backward(ctx0, gf, true);
+            ggml_build_backward_expand(ctx0, gf, gb, true);
         } else {
             logits = forward_batch_wo_cache(&model, ctx0, gf, tokens_input, n_tokens, n_batch);
             loss   = cross_entropy_loss(ctx0, logits, target_probs);
             ggml_build_forward_expand(gf, loss);
-            *gb = ggml_build_backward(ctx0, gf, true);
+            ggml_build_backward_expand(ctx0, gf, gb, true);
         }
 
         ggml_graph_compute(ctx0, gf);
@@ -4079,14 +4079,16 @@ int main(int argc, char ** argv) {
             };
             struct ggml_context * ctx0 = ggml_init(cparams);
 
-            ggml_cgraph gf = {};
-            gf.n_threads = params.n_threads;
+            struct ggml_tensor * gfbuf = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, sizeof(struct ggml_cgraph) / ggml_type_size(GGML_TYPE_I32) + (sizeof(struct ggml_cgraph) % ggml_type_size(GGML_TYPE_I32) ? 1 : 0));
+            memset(gfbuf->data, 0, ggml_nbytes(gfbuf));
+            struct ggml_cgraph * gf = (struct ggml_cgraph *) gfbuf->data;
+            gf->n_threads = params.n_threads;
 
             int n_past = 0;
-            struct ggml_tensor * logits = forward(&model, &kv_self, ctx0, &gf, tokens_input, sample_ctx, n_past);
+            struct ggml_tensor * logits = forward(&model, &kv_self, ctx0, gf, tokens_input, sample_ctx, n_past);
 
-            ggml_build_forward_expand(&gf, logits);
-            ggml_graph_compute(ctx0, &gf);
+            ggml_build_forward_expand(gf, logits);
+            ggml_graph_compute(ctx0, gf);
 
             //struct ggml_tensor * best_samples = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, sample_ctx);
             //struct ggml_tensor * probs        = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_vocab, sample_ctx);
