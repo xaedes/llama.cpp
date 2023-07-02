@@ -4047,11 +4047,13 @@ int main(int argc, char ** argv) {
             logits = forward_batch_wo_cache_flash_attn(&model, ctx0, gf, tokens_input, n_tokens, n_batch);
             loss   = cross_entropy_loss(ctx0, logits, target_probs);
             ggml_build_forward_expand(gf, loss);
+            *gb = *gf;
             ggml_build_backward_expand(ctx0, gf, gb, true);
         } else {
             logits = forward_batch_wo_cache(&model, ctx0, gf, tokens_input, n_tokens, n_batch);
             loss   = cross_entropy_loss(ctx0, logits, target_probs);
             ggml_build_forward_expand(gf, loss);
+            *gb = *gf;
             ggml_build_backward_expand(ctx0, gf, gb, true);
         }
 
