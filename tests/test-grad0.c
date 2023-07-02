@@ -200,7 +200,9 @@ bool check_gradient(
         int nargs,
         float eps,
         float max_error_abs,
-        float max_error_rel) {
+        float max_error_rel,
+        bool verbose,
+        int nargs_total) {
 
     static int n_threads = -1;
     if (n_threads < 0) {
@@ -227,7 +229,7 @@ bool check_gradient(
 
     // ggml_graph_dump_dot(&gf, NULL, "test-grad0-forward.dot");
     // ggml_graph_dump_dot(&gb, &gf,  "test-grad0-backward.dot");
-
+    bool success = true;
     for (int i = 0; i < nargs; ++i) {
         const int nelements = ggml_nelements(x[i]);
         for (int k = 0; k < nelements; ++k) {
@@ -260,15 +262,35 @@ bool check_gradient(
             const double error_rel = g0 != 0 ? fabs(g0 - g1)/fabs(g0) : 0;
 
             if (error_abs > max_error_abs || error_rel > max_error_rel) {
-                printf("%s: ndims=%d, i=%d, k=%d, x0=%f, xm=%f, xp=%f, f0=%f, f1=%f, g0=%f, g1=%f, eps=%f, error_abs=%f, error_rel=%f\n",
-                            op_name, ndims, i, k, x0, xm, xp, f0, f1, g0, g1, eps, error_abs, error_rel);
+                printf("%s: fail    nelem=%d, ndims=%d, ne=[%zd,%zd,%zd,%zd], i=%d, k=%d, x0=%f, xm=%f, xp=%f, f0=%f, f1=%f, g0=%f, g1=%f, eps=%f, error_abs=%f, error_rel=%f\n",
+                            op_name, nelements, ndims, x[i]->ne[0], x[i]->ne[1], x[i]->ne[2], x[i]->ne[3], i, k, x0, xm, xp, f0, f1, g0, g1, eps, error_abs, error_rel);
+
                 //assert(false);
-                return false;
+                success = false;
+                // return false;
+            } else if (verbose) {
+                printf("%s: success nelem=%d, ndims=%d, ne=[%zd,%zd,%zd,%zd], i=%d, k=%d, x0=%f, xm=%f, xp=%f, f0=%f, f1=%f, g0=%f, g1=%f, eps=%f, error_abs=%f, error_rel=%f\n",
+                            op_name, nelements, ndims, x[i]->ne[0], x[i]->ne[1], x[i]->ne[2], x[i]->ne[3], i, k, x0, xm, xp, f0, f1, g0, g1, eps, error_abs, error_rel);
             }
+        }
+
+    }
+
+    if (!success && verbose) {
+        for (int i=0; i<nargs_total; ++i) {
+            const int nelements = ggml_nelements(x[i]);
+            printf("x[%d] = [", i);
+            for (int j=0; j<nelements; ++j) {
+                if (j > 0) {
+                    printf(", ");
+                }
+                printf("%f", get_element(x[i], j));
+            }
+            printf("]\n");
         }
     }
 
-    return true;
+    return success;
 }
 
 // TODO: clean-up this ..
@@ -367,7 +389,7 @@ int main(int argc, const char ** argv) {
         }
     }
 
-
+    bool verbose = false;
     // original loop: 1000
     int niter = 4;
     const char *env = getenv("GGML_NLOOP");
@@ -384,10 +406,10 @@ int main(int argc, const char ** argv) {
         get_random_dims(ne, 4);
 
         struct ggml_tensor * x[MAX_NARGS];
-
         // add
         {
             const int nargs = 2;
+            const int nargs_total = 2;
 
             for (int ndims = 1; ndims <= 4; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -397,13 +419,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_add(ctx0, x[0], x[1]));
 
-                check_gradient("add", ctx0, x, f, ndims, nargs, 1e-3f, 2e-3f, 2e-3f);
+                check_gradient("add", ctx0, x, f, ndims, nargs, 1e-3f, 2e-3f, 2e-3f, verbose, nargs_total);
             }
         }
 
         // sub
         {
             const int nargs = 2;
+            const int nargs_total = 2;
 
             for (int ndims = 1; ndims <= 4; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -413,13 +436,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sub(ctx0, x[0], x[1]));
 
-                check_gradient("sub", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("sub", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, verbose, nargs_total);
             }
         }
 
         // mul
         {
             const int nargs = 2;
+            const int nargs_total = 2;
 
             for (int ndims = 1; ndims <= 4; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -429,13 +453,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_mul(ctx0, x[0], x[1]));
 
-                check_gradient("mul", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("mul", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
         // div
         {
             const int nargs = 2;
+            const int nargs_total = 2;
 
             for (int ndims = 1; ndims <= 4; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -445,13 +470,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_div(ctx0, x[0], x[1]));
 
-                check_gradient("div", ctx0, x, f, ndims, nargs, 1e-3f, 1e-1f, 1e-1f);
+                check_gradient("div", ctx0, x, f, ndims, nargs, 1e-3f, 1e-1f, 1e-1f, verbose, nargs_total);
             }
         }
 
         // sqr
         {
             const int nargs = 1;
+            const int nargs_total = 1;
 
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -461,13 +487,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sqr(ctx0, x[0]));
 
-                check_gradient("sqr", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("sqr", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
         // sqrt
         {
             const int nargs = 1;
+            const int nargs_total = 1;
 
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -477,13 +504,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sqrt(ctx0, x[0]));
 
-                check_gradient("sqrt", ctx0, x, f, ndims, nargs, 1e-3f, INFINITY, 1e-1f);
+                check_gradient("sqrt", ctx0, x, f, ndims, nargs, 1e-3f, INFINITY, 1e-1f, verbose, nargs_total);
             }
         }
 
         // log
         {
             const int nargs = 1;
+            const int nargs_total = 1;
 
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -493,13 +521,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_log(ctx0, x[0]));
 
-                check_gradient("log", ctx0, x, f, ndims, nargs, 1e-3f, INFINITY, 1e-1f);
+                check_gradient("log", ctx0, x, f, ndims, nargs, 1e-3f, INFINITY, 1e-1f, verbose, nargs_total);
             }
         }
 
         // sum
         {
             const int nargs = 1;
+            const int nargs_total = 1;
 
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -509,7 +538,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, x[0]);
 
-                check_gradient("sum", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f);
+                check_gradient("sum", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, 1e-3f, verbose, nargs_total);
             }
         }
 
@@ -517,6 +546,7 @@ int main(int argc, const char ** argv) {
         // sum_rows
         {
             const int nargs = 1;
+            const int nargs_total = 1;
 
             for (int ndims = 1; ndims <= 4; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -526,7 +556,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sqr(ctx0, ggml_sum_rows(ctx0, x[0])));
 
-                check_gradient("sum_rows", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY);
+                check_gradient("sum_rows", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -541,6 +571,8 @@ int main(int argc, const char ** argv) {
             ne2[3] = 1;
 
             const int nargs = 1;
+            const int nargs_total = 2;
+
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
                 x[1] = get_random_tensor(ctx0, ndims, ne2, -1.0f, 1.0f);
@@ -548,7 +580,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_sqr(ctx0, ggml_sub(ctx0, x[1], ggml_repeat(ctx0, x[0], x[1]))));
 
-                check_gradient("repeat", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY);
+                check_gradient("repeat", ctx0, x, f, ndims, nargs, 1e-3f, 1e-2f, INFINITY, verbose, nargs_total);
             }
 
         }
@@ -572,6 +604,7 @@ int main(int argc, const char ** argv) {
         // mul_mat
         {
             const int nargs = 2;
+            const int nargs_total = 2;
 
             for (int ndims = 2; ndims <= 2; ++ndims) {
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -590,7 +623,7 @@ int main(int argc, const char ** argv) {
 
                 GGML_PRINT_DEBUG("testing: mul_mat, [%lld, %lld] (%d) * [%lld, %lld] (%d)\n", x[1]->ne[0], x[1]->ne[1], x[1]->n_dims, x[0]->ne[0], x[0]->ne[1], x[0]->n_dims);
 
-                check_gradient("mul_mat", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("mul_mat", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
                 check_mat_mul(m, x[1], x[0]);
             }
         }
@@ -598,6 +631,7 @@ int main(int argc, const char ** argv) {
         // silu
         {
             const int nargs = 1;
+            const int nargs_total = 1;
 
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -609,9 +643,9 @@ int main(int argc, const char ** argv) {
 
 #ifdef GGML_SILU_FP16
                 // due to GGML_SILU_FP16 the finite difference method will be slightly wrong -> increase error bounds.
-                check_gradient("silu", ctx0, x, f, ndims, nargs, 1e-3f, 0.5, INFINITY);
+                check_gradient("silu", ctx0, x, f, ndims, nargs, 1e-3f, 0.5, INFINITY, verbose, nargs_total);
 #else
-                check_gradient("silu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("silu", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
 #endif
             }
         }
@@ -619,6 +653,7 @@ int main(int argc, const char ** argv) {
         // rms_norm
         {
             const int nargs = 1;
+            const int nargs_total = 1;
 
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -628,13 +663,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_rms_norm(ctx0, x[0]));
 
-                check_gradient("rms_norm", ctx0, x, f, ndims, nargs, 1e-4f, 1.0f, INFINITY);
+                check_gradient("rms_norm", ctx0, x, f, ndims, nargs, 1e-4f, 1.0f, INFINITY, verbose, nargs_total);
             }
         }
 
         // scale
         {
             const int nargs = 2;
+            const int nargs_total = 2;
 
             int64_t ne2[4];
             ne2[0] = 1;
@@ -648,13 +684,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_scale(ctx0, x[0], x[1]));
 
-                check_gradient("scale", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("scale", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
         // cpy
         {
             const int nargs = 2;
+            const int nargs_total = 2;
 
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 for (int i = 0; i < nargs; ++i) {
@@ -665,13 +702,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_cpy(ctx0, x[0], x[1]));
 
-                check_gradient("cpy", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("cpy", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
         // reshape (1d->nd)
         {
             const int nargs = 1;
+            const int nargs_total = 2;
 
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 int64_t ne2[4];
@@ -688,13 +726,14 @@ int main(int argc, const char ** argv) {
 
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_reshape(ctx0, x[0], x[1]));
-                check_gradient("reshape", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("reshape", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
         // reshape (nd->1d)
         {
             const int nargs = 1;
+            const int nargs_total = 2;
 
             for (int ndims = 1; ndims <= 2; ++ndims) {
                 int64_t ne2[4];
@@ -711,7 +750,7 @@ int main(int argc, const char ** argv) {
 
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_reshape(ctx0, x[0], x[1]));
-                check_gradient("reshape", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("reshape", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -720,6 +759,7 @@ int main(int argc, const char ** argv) {
             int64_t ne2[4] = { 1, 1, 1, 1 };
 
             const int nargs = 2;
+            const int nargs_total = 2;
             for (int ndims = 1; ndims <= 4; ++ndims) {
 
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -738,7 +778,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_acc(ctx0, x[0], x[1], x[0]->nb[1], x[0]->nb[2], x[0]->nb[3], offset));
 
-                check_gradient("acc 1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("acc 1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -749,6 +789,7 @@ int main(int argc, const char ** argv) {
             int64_t offsets[4]     = { 0, 0, 0, 0 };
 
             const int nargs = 2;
+            const int nargs_total = 2;
             for (int ndims = 2; ndims <= 4; ++ndims) {
 
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -770,7 +811,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_acc(ctx0, x[0], x[1], x[0]->nb[1], x[0]->nb[2], x[0]->nb[3], offset));
 
-                check_gradient("acc 2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("acc 2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -781,6 +822,7 @@ int main(int argc, const char ** argv) {
             int64_t offsets[4]     = { 0, 0, 0, 0 };
 
             const int nargs = 2;
+            const int nargs_total = 2;
             for (int ndims = 3; ndims <= 4; ++ndims) {
 
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -804,7 +846,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_acc(ctx0, x[0], x[1], x[0]->nb[1], x[0]->nb[2], x[0]->nb[3], offset));
 
-                check_gradient("acc 3d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("acc 3d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -815,6 +857,7 @@ int main(int argc, const char ** argv) {
             int64_t offsets[4]     = { 0, 0, 0, 0 };
 
             const int nargs = 2;
+            const int nargs_total = 2;
             for (int ndims = 4; ndims <= 4; ++ndims) {
 
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -840,7 +883,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_acc(ctx0, x[0], x[1], x[0]->nb[1], x[0]->nb[2], x[0]->nb[3], offset));
 
-                check_gradient("acc 4d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("acc 4d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -849,6 +892,7 @@ int main(int argc, const char ** argv) {
             int64_t ne2[4];
 
             const int nargs = 2;
+            const int nargs_total = 2;
             for (int ndims = 1; ndims <= 4; ++ndims) {
 
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -867,7 +911,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_set_1d(ctx0, x[0], x[1], offset));
 
-                check_gradient("set_1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("set_1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -878,6 +922,7 @@ int main(int argc, const char ** argv) {
             int64_t offsets[4]     = { 0, 0, 0, 0 };
 
             const int nargs = 1;
+            const int nargs_total = 2;
             for (int ndims = 2; ndims <= 4; ++ndims) {
 
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -899,13 +944,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_set_2d(ctx0, x[0], x[1], x[1]->nb[1], offset));
 
-                check_gradient("set_2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("set_2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
         // view_1d
         {
             const int nargs = 1;
+            const int nargs_total = 1;
             for (int ndims = 1; ndims <= 4; ++ndims) {
 
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -922,7 +968,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_view_1d(ctx0, x[0], nelem, offset));
 
-                check_gradient("view_1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("view_1d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -932,6 +978,7 @@ int main(int argc, const char ** argv) {
             int64_t nb2[4];
 
             const int nargs = 1;
+            const int nargs_total = 1;
             for (int ndims = 1; ndims <= 4; ++ndims) {
 
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -952,7 +999,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_view_2d(ctx0, x[0], ne2[0], ne2[1], nb2[1], offset));
 
-                check_gradient("view_2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("view_2d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -962,6 +1009,7 @@ int main(int argc, const char ** argv) {
             int64_t nb2[4] = {0,0,0,0};
 
             const int nargs = 1;
+            const int nargs_total = 1;
             for (int ndims = 1; ndims <= 4; ++ndims) {
 
                 x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -983,7 +1031,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_view_3d(ctx0, x[0], ne2[0], ne2[1], ne2[2], nb2[1], nb2[2], offset));
 
-                check_gradient("view_3d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("view_3d", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -992,6 +1040,7 @@ int main(int argc, const char ** argv) {
             int64_t ne2[4];
 
             const int nargs = 1;
+            const int nargs_total = 1;
             for (int ndims = 1; ndims <= 4; ++ndims)
             {
                 // ggml_permute will set axes of dimensions below n_dims to 1.
@@ -1016,7 +1065,7 @@ int main(int argc, const char ** argv) {
                 // sum requires contiguous tensor rows
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_cont(ctx0, ggml_permute(ctx0, x[0], ax0, ax1, ax2, ax3)));
 
-                check_gradient("permute", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("permute", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -1025,6 +1074,7 @@ int main(int argc, const char ** argv) {
             int64_t ne2[4];
 
             const int nargs = 1;
+            const int nargs_total = 1;
             for (int ndims = 1; ndims <= 4; ++ndims)
             {
                 // ggml_transpose will set axes of dimensions below n_dims to 1.
@@ -1043,7 +1093,7 @@ int main(int argc, const char ** argv) {
                 // sum requires contiguous tensor rows
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, x[0])));
 
-                check_gradient("transpose", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+                check_gradient("transpose", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
@@ -1052,6 +1102,7 @@ int main(int argc, const char ** argv) {
             int64_t ne2[4] = {ne[0], ne[1], 1, 1};
             int64_t ne3[4] = {1+irand(ne[1]), 1, 1, 1};
             const int nargs = 1;
+            const int nargs_total = 2;
             const int ndims = 2;
             x[0] = get_random_tensor(ctx0, ndims, ne2, -1.0f, 1.0f);
             x[1] = get_random_tensor_int(ctx0, 1, ne3, 0, ne2[1]);
@@ -1060,12 +1111,13 @@ int main(int argc, const char ** argv) {
 
             struct ggml_tensor * f = ggml_sum(ctx0, ggml_get_rows(ctx0, x[0], x[1]));
 
-            check_gradient("get_rows", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+            check_gradient("get_rows", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
         }
 
         // diag_mask_inf
         {
             const int nargs = 1;
+            const int nargs_total = 1;
             const int ndims = 2;
 
             x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -1075,12 +1127,13 @@ int main(int argc, const char ** argv) {
 
             struct ggml_tensor * f = ggml_sum(ctx0, ggml_diag_mask_inf(ctx0, x[0], n_past));
 
-            check_gradient("diag_mask_inf", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+            check_gradient("diag_mask_inf", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
         }
 
         // diag_mask_zero
         {
             const int nargs = 1;
+            const int nargs_total = 1;
             const int ndims = 2;
 
             x[0] = get_random_tensor(ctx0, ndims, ne, -1.0f, 1.0f);
@@ -1090,38 +1143,40 @@ int main(int argc, const char ** argv) {
 
             struct ggml_tensor * f = ggml_sum(ctx0, ggml_diag_mask_zero(ctx0, x[0], n_past));
 
-            check_gradient("diag_mask_zero", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY);
+            check_gradient("diag_mask_zero", ctx0, x, f, ndims, nargs, 1e-3f, 1e-3f, INFINITY, verbose, nargs_total);
         }
 
         // softmax
         {
             const int nargs = 1;
+            const int nargs_total = 1;
 
             int64_t ne2[4];
             get_random_dims(ne2, 4);
 
-            for (int ndims = 1; ndims <= 3; ++ndims) {
+            for (int ndims = 1; ndims <= 4; ++ndims) {
                 x[0] = get_random_tensor(ctx0, ndims, ne2, -1.0f, 1.0f);
                 ggml_set_param(ctx0, x[0]);
 
                 float eps = 1e-6f;
                 // dont use only sum as aggregation, because sum of softmax is always 1 -> finite differences should not work
                 // instead use sum(log(soft_max()*(1-eps)+eps)); use eps to avoid log(0)
-                struct ggml_tensor * f = ggml_sum(ctx0, 
-                                            ggml_log(ctx0, 
-                                                ggml_add1(ctx0, 
+                struct ggml_tensor * f = ggml_sum(ctx0,
+                                            ggml_log(ctx0,
+                                                ggml_add1(ctx0,
                                                     ggml_scale(ctx0,
                                                         ggml_soft_max(ctx0, x[0]),
                                                         ggml_new_f32(ctx0, 1.0f - eps)),
                                                     ggml_new_f32(ctx0, eps))));
 
-                check_gradient("softmax", ctx0, x, f, ndims, nargs, 1e-3f, 2e-1f, INFINITY);
+                check_gradient("softmax", ctx0, x, f, ndims, nargs, 1e-3f, 2e-1f, INFINITY, verbose, nargs_total);
             }
         }
 
         // cross_entropy_loss
         {
             const int nargs = 1;
+            const int nargs_total = 2;
 
             int64_t ne2[4];
             get_random_dims(ne2, 4);
@@ -1144,13 +1199,14 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_cross_entropy_loss(ctx0, x[0], x[1]);
 
-                check_gradient("cross_entropy_loss", ctx0, x, f, ndims, nargs, 1e-4f, 1e-1f, INFINITY);
+                check_gradient("cross_entropy_loss", ctx0, x, f, ndims, nargs, 1e-4f, 1e-1f, INFINITY, verbose, nargs_total);
             }
         }
 
         // rope
         {
             const int nargs = 1;
+            const int nargs_total = 1;
 
             int64_t ne2[4];
             get_random_dims(ne2, 4);
@@ -1176,7 +1232,7 @@ int main(int argc, const char ** argv) {
                         struct ggml_tensor * f = ggml_sum(ctx0, ggml_rope(ctx0, x[0], n_past, n_rot, mode));
 
                         GGML_PRINT_DEBUG("rope: n_past: %d n_rot: %d mode: %d\n", n_past, n_rot, mode);
-                        check_gradient("rope", ctx0, x, f, ndims, nargs, 1e-2f, 1e-3f, INFINITY);
+                        check_gradient("rope", ctx0, x, f, ndims, nargs, 1e-2f, 1e-3f, INFINITY, verbose, nargs_total);
                     }
                 }
             }
@@ -1185,6 +1241,7 @@ int main(int argc, const char ** argv) {
         // flash_attn
         {
             const int nargs = 3;
+            const int nargs_total = 3;
 
             int64_t ne2[4];
 
@@ -1217,7 +1274,7 @@ int main(int argc, const char ** argv) {
 
                     struct ggml_tensor * f = ggml_sum(ctx0, ggml_flash_attn(ctx0, x[0], x[1], x[2], (masked == 0)));
 
-                    check_gradient("flash_attn", ctx0, x, f, ndims, nargs, 1.5e-4f, INFINITY, 3.5f);
+                    check_gradient("flash_attn", ctx0, x, f, ndims, nargs, 1.5e-4f, INFINITY, 3.5f, verbose, nargs_total);
                 }
             }
         }
