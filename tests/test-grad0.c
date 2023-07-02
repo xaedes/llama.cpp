@@ -238,14 +238,14 @@ bool check_gradient(
             set_element(x[i], k, xp);
             ggml_graph_compute(ctx0, &gf);
 
-            const float f0 = ggml_get_f32_1d(f, 0);
+            const double f0 = ggml_get_f32_1d(f, 0);
 
             set_element(x[i], k, xm);
             ggml_graph_compute(ctx0, &gf);
 
-            const float f1 = ggml_get_f32_1d(f, 0);
+            const double f1 = ggml_get_f32_1d(f, 0);
 
-            const float g0 = (f0 - f1)/(2.0f*eps);
+            const double g0 = (f0 - f1)/(2.0*(double) eps);
 
             set_element(x[i], k, x0);
 
@@ -254,10 +254,10 @@ bool check_gradient(
             ggml_set_f32      (f->grad, 1.0f);
             ggml_graph_compute(ctx0, &gb);
 
-            const float g1 = get_element(x[i]->grad, k);
+            const double g1 = get_element(x[i]->grad, k);
 
-            const float error_abs = fabsf(g0 - g1);
-            const float error_rel = g0 != 0 ? fabsf(g0 - g1)/fabs(g0) : 0;
+            const double error_abs = fabs(g0 - g1);
+            const double error_rel = g0 != 0 ? fabs(g0 - g1)/fabs(g0) : 0;
 
             if (error_abs > max_error_abs || error_rel > max_error_rel) {
                 printf("%s: ndims=%d, i=%d, k=%d, x0=%f, xm=%f, xp=%f, f0=%f, f1=%f, g0=%f, g1=%f, eps=%f, error_abs=%f, error_rel=%f\n",
