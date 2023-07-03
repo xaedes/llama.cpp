@@ -10780,10 +10780,9 @@ static void ggml_compute_forward_mul_mat_f16_f32(
     // TODO: do not support transposed src1
     assert(nb10/2 == sizeof(ggml_fp16_t));
 
-    // parallelize by src0 rows using ggml_vec_dot_f16
-
-    // total rows in src0
-    const int nr = ne01*ne02*ne03;
+    // parallelize by src1 rows using ggml_vec_dot_f16
+    // total rows in src1
+    const int nr = ne11*ne12*ne13;
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -10795,25 +10794,26 @@ static void ggml_compute_forward_mul_mat_f16_f32(
     ggml_fp16_t * wdata = params->wdata;
 
     for (int ir = ir0; ir < ir1; ++ir) {
-        // src0 indices
-        const int i03 = ir/(ne02*ne01);
-        const int i02 = (ir - i03*ne02*ne01)/ne01;
-        const int i01 = (ir - i03*ne02*ne01 - i02*ne01);
+        // src1 indices
+        const int i13 = ir/(ne12*ne11);
+        const int i12 = (ir - i13*ne12*ne11)/ne11;
+        const int i11 = (ir - i13*ne12*ne11 - i12*ne11);
 
-        const int i13 = i03;
-        const int i12 = i02;
+        const int i03 = i13;
+        const int i02 = i12;
 
-        const int i0 = i01;
-        const int i2 = i02;
-        const int i3 = i03;
+        // const int i0 = i01;
+        const int i1 = i11;
+        const int i2 = i12;
+        const int i3 = i13;
 
-        ggml_fp16_t * src0_row = (ggml_fp16_t *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
-        ggml_fp16_t * src1_col =                                wdata + (       0 + i12*ne11 + i13*ne12*ne11)*ne00;
+        ggml_fp16_t * src1_row =                         wdata + ( i11 + i12*ne11 + i13*ne12*ne11)*ne00;
+        float       * dst_row  = (float *) ((char *) dst->data + ( i1*nb1 + i2*nb2 + i3*nb3));
 
-        float * dst_col = (float *) ((char *) dst->data + (i0*nb0 + 0*nb1 + i2*nb2 + i3*nb3));
-
-        for (int64_t ic = 0; ic < ne11; ++ic) {
-            ggml_vec_dot_f16(ne00, &dst_col[ic*ne0], src0_row, src1_col + ic*ne00);
+        for (int64_t ic = 0; ic < ne01; ++ic) {
+            const int i01 = ic;
+            ggml_fp16_t * src0_row = (ggml_fp16_t *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
+            ggml_vec_dot_f16(ne00, &dst_row[ic], src0_row, src1_row);
         }
     }
 
