@@ -1199,7 +1199,7 @@ int main(int argc, const char ** argv) {
 
                 struct ggml_tensor * f = ggml_cross_entropy_loss(ctx0, x[0], x[1]);
 
-                check_gradient("cross_entropy_loss", ctx0, x, f, ndims, nargs, 1e-4f, 1e-1f, INFINITY, verbose, nargs_total);
+                check_gradient("cross_entropy_loss", ctx0, x, f, ndims, nargs, 1e-4f, 1e-3f, INFINITY, verbose, nargs_total);
             }
         }
 
