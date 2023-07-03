@@ -10977,10 +10977,9 @@ static void ggml_compute_forward_mul_mat_q_f32(
         return;
     }
 
-    // parallelize by src0 rows using ggml_vec_dot_q
-
-    // total rows in src0
-    const int nr = ne01*ne02*ne03;
+    // parallelize by src1 rows using ggml_vec_dot_q
+    // total rows in src1
+    const int nr = ne11*ne12*ne13;
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -10990,30 +10989,30 @@ static void ggml_compute_forward_mul_mat_q_f32(
     const int ir1 = MIN(ir0 + dr, nr);
 
     void * wdata = params->wdata;
-    const size_t row_size = ne00*GGML_TYPE_SIZE[vec_dot_type]/GGML_BLCK_SIZE[vec_dot_type];
+    const size_t row_size = ne10*GGML_TYPE_SIZE[vec_dot_type]/GGML_BLCK_SIZE[vec_dot_type];
 
     for (int ir = ir0; ir < ir1; ++ir) {
-        // src0 indices
-        const int i03 = ir/(ne02*ne01);
-        const int i02 = (ir - i03*ne02*ne01)/ne01;
-        const int i01 = (ir - i03*ne02*ne01 - i02*ne01);
+        // src1 indices
+        const int i13 = ir/(ne12*ne11);
+        const int i12 = (ir - i13*ne12*ne11)/ne11;
+        const int i11 = (ir - i13*ne12*ne11 - i12*ne11);
 
-        const int i13 = i03;
-        const int i12 = i02;
+        const int i03 = i13;
+        const int i02 = i12;
 
-        const int i0 = i01;
-        const int i2 = i02;
-        const int i3 = i03;
+        const int i1 = i11;
+        const int i2 = i12;
+        const int i3 = i13;
 
-        void * src0_row = (void *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
-        char * src1_col =          ((char *)      wdata + (      (0 + i12*ne11 + i13*ne12*ne11)*row_size));
-
-        float * dst_col = (float *) ((char *) dst->data + (i0*nb0 + 0*nb1 + i2*nb2 + i3*nb3));
+        void * src1_row = (void *) ((char *)      wdata + (i11 + i12*ne11 + i13*ne12*ne11)*row_size);
+        float * dst_row = (float *) ((char *) dst->data + ( i1*nb1 + i2*nb2 + i3*nb3));
 
         assert(ne00 % 32 == 0);
 
-        for (int64_t ic = 0; ic < ne11; ++ic) {
-            vec_dot_q(ne00, &dst_col[ic*ne0], src0_row, (void *) (src1_col + ic*row_size));
+        for (int64_t ic = 0; ic < ne01; ++ic) {
+            const int i01 = ic;
+            void * src0_row = (void *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
+            vec_dot_q(ne00, &dst_row[ic], src0_row, src1_row);
         }
     }
 
