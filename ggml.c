@@ -10473,10 +10473,10 @@ static void ggml_compute_forward_mul_mat_f32(
     const int64_t ne10 = src1->ne[0];
 #endif
     const int64_t ne11 = src1->ne[1];
-#ifndef NDEBUG
     const int64_t ne12 = src1->ne[2];
     const int64_t ne13 = src1->ne[3];
 
+#ifndef NDEBUG
     const int64_t ne0  = dst->ne[0];
     const int64_t ne1  = dst->ne[1];
     const int64_t ne2  = dst->ne[2];
@@ -10576,10 +10576,9 @@ static void ggml_compute_forward_mul_mat_f32(
         return;
     }
 
-    // parallelize by src0 rows using ggml_vec_dot_f32
-
-    // total rows in src0
-    const int nr = ne01*ne02*ne03;
+    // parallelize by src1 rows using ggml_vec_dot_f32
+    // total rows in src1
+    const int nr = ne11*ne12*ne13;
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -10590,26 +10589,30 @@ static void ggml_compute_forward_mul_mat_f32(
 
     for (int ir = ir0; ir < ir1; ++ir) {
         // src0 indices
-        const int i03 = ir/(ne02*ne01);
-        const int i02 = (ir - i03*ne02*ne01)/ne01;
-        const int i01 = (ir - i03*ne02*ne01 - i02*ne01);
+        const int i13 = ir/(ne12*ne11);
+        const int i12 = (ir - i13*ne12*ne11)/ne11;
+        const int i11 = (ir - i13*ne12*ne11 - i12*ne11);
 
-        for (int64_t ic = 0; ic < ne11; ++ic) {
+        for (int64_t ic = 0; ic < ne01; ++ic) {
+            // src0 indices
+            const int i03 = i13;
+            const int i02 = i12;
+            const int i01 = ic;
+
             // src1 indices
             const int i13 = i03;
             const int i12 = i02;
-            const int i11 = ic;
 
             // dst indices
-            const int i0 = i01;
+            const int i0 = ic;
             const int i1 = i11;
             const int i2 = i02;
             const int i3 = i03;
 
             ggml_vec_dot_f32(ne00,
-                    (float *) ((char *)  dst->data + (i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3)),
-                    (float *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03)),
-                    (float *) ((char *) src1->data + (i11*nb11 + i12*nb12 + i13*nb13)));
+                    (float *) ((char *)  dst->data + (i0*nb0  + i1*nb1  +  i2*nb2  +  i3*nb3)),
+                    (float *) ((char *) src0->data + (         i01*nb01 + i02*nb02 + i03*nb03)),
+                    (float *) ((char *) src1->data + (         i11*nb11 + i12*nb12 + i13*nb13)));
         }
     }
 
