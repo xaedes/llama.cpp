@@ -10576,43 +10576,82 @@ static void ggml_compute_forward_mul_mat_f32(
         return;
     }
 
-    // parallelize by src1 rows using ggml_vec_dot_f32
-    // total rows in src1
-    const int nr = ne11*ne12*ne13;
+    if (ne01 >= ne11) {
+        // parallelize by src0 rows using ggml_vec_dot_f32
 
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+        // total rows in src0
+        const int nr = ne01*ne02*ne03;
 
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
+        // rows per thread
+        const int dr = (nr + nth - 1)/nth;
 
-    for (int ir = ir0; ir < ir1; ++ir) {
-        // src0 indices
-        const int i13 = ir/(ne12*ne11);
-        const int i12 = (ir - i13*ne12*ne11)/ne11;
-        const int i11 = (ir - i13*ne12*ne11 - i12*ne11);
+        // row range for this thread
+        const int ir0 = dr*ith;
+        const int ir1 = MIN(ir0 + dr, nr);
 
-        for (int64_t ic = 0; ic < ne01; ++ic) {
+        for (int ir = ir0; ir < ir1; ++ir) {
             // src0 indices
-            const int i03 = i13;
-            const int i02 = i12;
-            const int i01 = ic;
+            const int i03 = ir/(ne02*ne01);
+            const int i02 = (ir - i03*ne02*ne01)/ne01;
+            const int i01 = (ir - i03*ne02*ne01 - i02*ne01);
 
-            // src1 indices
-            const int i13 = i03;
-            const int i12 = i02;
+            for (int64_t ic = 0; ic < ne11; ++ic) {
+                // src1 indices
+                const int i13 = i03;
+                const int i12 = i02;
+                const int i11 = ic;
 
-            // dst indices
-            const int i0 = ic;
-            const int i1 = i11;
-            const int i2 = i02;
-            const int i3 = i03;
+                // dst indices
+                const int i0 = i01;
+                const int i1 = i11;
+                const int i2 = i02;
+                const int i3 = i03;
 
-            ggml_vec_dot_f32(ne00,
-                    (float *) ((char *)  dst->data + (i0*nb0  + i1*nb1  +  i2*nb2  +  i3*nb3)),
-                    (float *) ((char *) src0->data + (         i01*nb01 + i02*nb02 + i03*nb03)),
-                    (float *) ((char *) src1->data + (         i11*nb11 + i12*nb12 + i13*nb13)));
+                ggml_vec_dot_f32(ne00,
+                        (float *) ((char *)  dst->data + (i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3)),
+                        (float *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03)),
+                        (float *) ((char *) src1->data + (i11*nb11 + i12*nb12 + i13*nb13)));
+            }
+        }
+    } else {
+        // parallelize by src1 rows using ggml_vec_dot_f32
+        // total rows in src1
+        const int nr = ne11*ne12*ne13;
+
+        // rows per thread
+        const int dr = (nr + nth - 1)/nth;
+
+        // row range for this thread
+        const int ir0 = dr*ith;
+        const int ir1 = MIN(ir0 + dr, nr);
+
+        for (int ir = ir0; ir < ir1; ++ir) {
+            // src0 indices
+            const int i13 = ir/(ne12*ne11);
+            const int i12 = (ir - i13*ne12*ne11)/ne11;
+            const int i11 = (ir - i13*ne12*ne11 - i12*ne11);
+
+            for (int64_t ic = 0; ic < ne01; ++ic) {
+                // src0 indices
+                const int i03 = i13;
+                const int i02 = i12;
+                const int i01 = ic;
+
+                // src1 indices
+                const int i13 = i03;
+                const int i12 = i02;
+
+                // dst indices
+                const int i0 = ic;
+                const int i1 = i11;
+                const int i2 = i02;
+                const int i3 = i03;
+
+                ggml_vec_dot_f32(ne00,
+                        (float *) ((char *)  dst->data + (i0*nb0  + i1*nb1  +  i2*nb2  +  i3*nb3)),
+                        (float *) ((char *) src0->data + (         i01*nb01 + i02*nb02 + i03*nb03)),
+                        (float *) ((char *) src1->data + (         i11*nb11 + i12*nb12 + i13*nb13)));
+            }
         }
     }
 
@@ -10780,40 +10819,78 @@ static void ggml_compute_forward_mul_mat_f16_f32(
     // TODO: do not support transposed src1
     assert(nb10/2 == sizeof(ggml_fp16_t));
 
-    // parallelize by src1 rows using ggml_vec_dot_f16
-    // total rows in src1
-    const int nr = ne11*ne12*ne13;
+    if (ne01 >= ne11) {
+        // parallelize by src0 rows using ggml_vec_dot_f16
+        // total rows in src0
+        const int nr = ne01*ne02*ne03;
 
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+        // rows per thread
+        const int dr = (nr + nth - 1)/nth;
 
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
+        // row range for this thread
+        const int ir0 = dr*ith;
+        const int ir1 = MIN(ir0 + dr, nr);
 
-    ggml_fp16_t * wdata = params->wdata;
+        ggml_fp16_t * wdata = params->wdata;
 
-    for (int ir = ir0; ir < ir1; ++ir) {
-        // src1 indices
-        const int i13 = ir/(ne12*ne11);
-        const int i12 = (ir - i13*ne12*ne11)/ne11;
-        const int i11 = (ir - i13*ne12*ne11 - i12*ne11);
+        for (int ir = ir0; ir < ir1; ++ir) {
+            // src0 indices
+            const int i03 = ir/(ne02*ne01);
+            const int i02 = (ir - i03*ne02*ne01)/ne01;
+            const int i01 = (ir - i03*ne02*ne01 - i02*ne01);
 
-        const int i03 = i13;
-        const int i02 = i12;
+            const int i13 = i03;
+            const int i12 = i02;
 
-        // const int i0 = i01;
-        const int i1 = i11;
-        const int i2 = i12;
-        const int i3 = i13;
+            const int i0 = i01;
+            const int i2 = i02;
+            const int i3 = i03;
 
-        ggml_fp16_t * src1_row =                         wdata + ( i11 + i12*ne11 + i13*ne12*ne11)*ne00;
-        float       * dst_row  = (float *) ((char *) dst->data + ( i1*nb1 + i2*nb2 + i3*nb3));
-
-        for (int64_t ic = 0; ic < ne01; ++ic) {
-            const int i01 = ic;
             ggml_fp16_t * src0_row = (ggml_fp16_t *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
-            ggml_vec_dot_f16(ne00, &dst_row[ic], src0_row, src1_row);
+            ggml_fp16_t * src1_col =                                wdata + (       0 + i12*ne11 + i13*ne12*ne11)*ne00;
+
+            float * dst_col = (float *) ((char *) dst->data + (i0*nb0 + 0*nb1 + i2*nb2 + i3*nb3));
+
+            for (int64_t ic = 0; ic < ne11; ++ic) {
+                ggml_vec_dot_f16(ne00, &dst_col[ic*ne0], src0_row, src1_col + ic*ne00);
+            }
+        }
+    } else {
+        // parallelize by src1 rows using ggml_vec_dot_f16
+        // total rows in src1
+        const int nr = ne11*ne12*ne13;
+
+        // rows per thread
+        const int dr = (nr + nth - 1)/nth;
+
+        // row range for this thread
+        const int ir0 = dr*ith;
+        const int ir1 = MIN(ir0 + dr, nr);
+
+        ggml_fp16_t * wdata = params->wdata;
+
+        for (int ir = ir0; ir < ir1; ++ir) {
+            // src1 indices
+            const int i13 = ir/(ne12*ne11);
+            const int i12 = (ir - i13*ne12*ne11)/ne11;
+            const int i11 = (ir - i13*ne12*ne11 - i12*ne11);
+
+            const int i03 = i13;
+            const int i02 = i12;
+
+            // const int i0 = i01;
+            const int i1 = i11;
+            const int i2 = i12;
+            const int i3 = i13;
+
+            ggml_fp16_t * src1_row =                         wdata + ( i11 + i12*ne11 + i13*ne12*ne11)*ne00;
+            float       * dst_row  = (float *) ((char *) dst->data + ( i1*nb1 + i2*nb2 + i3*nb3));
+
+            for (int64_t ic = 0; ic < ne01; ++ic) {
+                const int i01 = ic;
+                ggml_fp16_t * src0_row = (ggml_fp16_t *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
+                ggml_vec_dot_f16(ne00, &dst_row[ic], src0_row, src1_row);
+            }
         }
     }
 
@@ -10977,42 +11054,83 @@ static void ggml_compute_forward_mul_mat_q_f32(
         return;
     }
 
-    // parallelize by src1 rows using ggml_vec_dot_q
-    // total rows in src1
-    const int nr = ne11*ne12*ne13;
+    if (ne01 >= ne11) {
+        // parallelize by src0 rows using ggml_vec_dot_q
+        // total rows in src0
+        const int nr = ne01*ne02*ne03;
 
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+        // rows per thread
+        const int dr = (nr + nth - 1)/nth;
 
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
+        // row range for this thread
+        const int ir0 = dr*ith;
+        const int ir1 = MIN(ir0 + dr, nr);
 
-    void * wdata = params->wdata;
-    const size_t row_size = ne10*GGML_TYPE_SIZE[vec_dot_type]/GGML_BLCK_SIZE[vec_dot_type];
+        void * wdata = params->wdata;
+        const size_t row_size = ne00*GGML_TYPE_SIZE[vec_dot_type]/GGML_BLCK_SIZE[vec_dot_type];
 
-    for (int ir = ir0; ir < ir1; ++ir) {
-        // src1 indices
-        const int i13 = ir/(ne12*ne11);
-        const int i12 = (ir - i13*ne12*ne11)/ne11;
-        const int i11 = (ir - i13*ne12*ne11 - i12*ne11);
+        for (int ir = ir0; ir < ir1; ++ir) {
+            // src0 indices
+            const int i03 = ir/(ne02*ne01);
+            const int i02 = (ir - i03*ne02*ne01)/ne01;
+            const int i01 = (ir - i03*ne02*ne01 - i02*ne01);
 
-        const int i03 = i13;
-        const int i02 = i12;
+            const int i13 = i03;
+            const int i12 = i02;
 
-        const int i1 = i11;
-        const int i2 = i12;
-        const int i3 = i13;
+            const int i0 = i01;
+            const int i2 = i02;
+            const int i3 = i03;
 
-        void * src1_row = (void *) ((char *)      wdata + (i11 + i12*ne11 + i13*ne12*ne11)*row_size);
-        float * dst_row = (float *) ((char *) dst->data + ( i1*nb1 + i2*nb2 + i3*nb3));
-
-        assert(ne00 % 32 == 0);
-
-        for (int64_t ic = 0; ic < ne01; ++ic) {
-            const int i01 = ic;
             void * src0_row = (void *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
-            vec_dot_q(ne00, &dst_row[ic], src0_row, src1_row);
+            char * src1_col =          ((char *)      wdata + (      (0 + i12*ne11 + i13*ne12*ne11)*row_size));
+
+            float * dst_col = (float *) ((char *) dst->data + (i0*nb0 + 0*nb1 + i2*nb2 + i3*nb3));
+
+            assert(ne00 % 32 == 0);
+
+            for (int64_t ic = 0; ic < ne11; ++ic) {
+                vec_dot_q(ne00, &dst_col[ic*ne0], src0_row, (void *) (src1_col + ic*row_size));
+            }
+        }
+    } else {
+        // parallelize by src1 rows using ggml_vec_dot_q
+        // total rows in src1
+        const int nr = ne11*ne12*ne13;
+
+        // rows per thread
+        const int dr = (nr + nth - 1)/nth;
+
+        // row range for this thread
+        const int ir0 = dr*ith;
+        const int ir1 = MIN(ir0 + dr, nr);
+
+        void * wdata = params->wdata;
+        const size_t row_size = ne10*GGML_TYPE_SIZE[vec_dot_type]/GGML_BLCK_SIZE[vec_dot_type];
+
+        for (int ir = ir0; ir < ir1; ++ir) {
+            // src1 indices
+            const int i13 = ir/(ne12*ne11);
+            const int i12 = (ir - i13*ne12*ne11)/ne11;
+            const int i11 = (ir - i13*ne12*ne11 - i12*ne11);
+
+            const int i03 = i13;
+            const int i02 = i12;
+
+            const int i1 = i11;
+            const int i2 = i12;
+            const int i3 = i13;
+
+            void * src1_row = (void *) ((char *)      wdata + (i11 + i12*ne11 + i13*ne12*ne11)*row_size);
+            float * dst_row = (float *) ((char *) dst->data + ( i1*nb1 + i2*nb2 + i3*nb3));
+
+            assert(ne00 % 32 == 0);
+
+            for (int64_t ic = 0; ic < ne01; ++ic) {
+                const int i01 = ic;
+                void * src0_row = (void *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
+                vec_dot_q(ne00, &dst_row[ic], src0_row, src1_row);
+            }
         }
     }
 
