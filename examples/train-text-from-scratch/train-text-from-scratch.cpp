@@ -804,6 +804,8 @@ struct ggml_tensor * ggml_recompute_graph_node(
     GGML_ASSERT(sizeof(node->name)      == GGML_MAX_NAME);
     memcpy(clone->op_params, node->op_params, sizeof(node->op_params));
     ggml_format_name(clone, "%s (clone)", ggml_get_name(node));
+    printf("%s: new clone: op=%s name=%s\n", __func__, ggml_op_name(clone->op), ggml_get_name(clone));
+    // memcpy(clone->name,      node->name,      sizeof(node->name));
 
     return clone;
 };
@@ -989,6 +991,7 @@ struct ggml_tensor * llama_build_train_graphs(
             if (gf->grads[i]->data == NULL && !ggml_is_view(gf->grads[i])) {
                 ggml_allocr_alloc(alloc, gf->grads[i]);
             }
+            // printf("%s:                g[%02d] data=[%p..%p] op=%s name=%s\n", __func__, i, gf->grads[i]->data, (char*) gf->grads[i]->data + ggml_nbytes(gf->grads[i]), ggml_op_name(gf->grads[i]->op), ggml_get_name(gf->grads[i]));
             ggml_build_forward_expand(gb, ggml_scale_inplace(ctx, gf->grads[i], one));
         }
         for (int i = 0; i < checkpoints.size(); ++i) {
@@ -1011,6 +1014,10 @@ struct ggml_tensor * llama_build_train_graphs(
         }
         gb->n_leafs = n_leafs_before;
         gb->n_nodes = n_nodes_before;
+        // for (int i=0; i<gb->n_nodes; ++i) {
+        //     struct ggml_tensor * node = gb->nodes[i];
+        //     printf("%s: node[%d] data=[%p..%p]\n", __func__, i, node->data, (char*) node->data + ggml_nbytes(node));
+        // }
     }
 
     *logits = t35;
