@@ -3780,6 +3780,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FLASH_ATTN",
     "FLASH_FF",
     "FLASH_ATTN_BACK",
+    "FLASH_FF_GATED",
+    "FLASH_FF_GATED_BACK",
     "WIN_PART",
     "WIN_UNPART",
     "GET_REL_POS",
@@ -3802,7 +3804,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS_BACK",
 };
 
-static_assert(GGML_OP_COUNT == 68, "GGML_OP_COUNT != 68");
+static_assert(GGML_OP_COUNT == 70, "GGML_OP_COUNT != 70");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -3862,6 +3864,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "flash_attn(x)",
     "flash_ff(x)",
     "flash_attn_back(x)",
+    "flash_ff_gated(x)",
+    "flash_ff_gated_back(x)",
     "win_part(x)",
     "win_unpart(x)",
     "get_rel_pos(x)",
@@ -3884,7 +3888,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss_back(x,y)",
 };
 
-static_assert(GGML_OP_COUNT == 68, "GGML_OP_COUNT != 68");
+static_assert(GGML_OP_COUNT == 70, "GGML_OP_COUNT != 70");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -7524,6 +7528,72 @@ struct ggml_tensor * ggml_flash_attn_back(
     result->src[3] = d;
 
     return result;
+}
+
+// ggml_flash_ff_gated
+
+struct ggml_tensor * ggml_flash_ff_gated(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * w1,
+        struct ggml_tensor  * w2,
+        struct ggml_tensor  * w3) {
+    GGML_ASSERT(ggml_can_mul_mat(w1, a));
+    GGML_ASSERT(ggml_can_mul_mat(w2, a));
+
+    bool is_node = false;
+
+    if (a->grad || w1->grad || w2->grad || w3->grad) {
+        is_node = true;
+    }
+
+    //struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, a->n_dims, a->ne);
+
+    result->op   = GGML_OP_FLASH_FF_GATED;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = w1;
+    result->src[2] = w2;
+    result->src[3] = w3;
+
+    return result;    
+}
+
+// ggml_flash_ff_gated_back
+
+struct ggml_tensor * ggml_flash_ff_gated_back(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * w1,
+        struct ggml_tensor  * w2,
+        struct ggml_tensor  * w3,
+        struct ggml_tensor  * d) {
+    GGML_ASSERT(ggml_can_mul_mat(w1, a));
+    GGML_ASSERT(ggml_can_mul_mat(w2, a));
+
+    bool is_node = false;
+
+    if (a->grad || w1->grad || w2->grad || w3->grad) {
+        // when using this operation (in backwards pass) these grads are set.
+        // we don't want to create (big) grad of our result, so is_node is false.
+        is_node = false;
+    }
+
+    int64_t ne = ggml_nelements(a)+ggml_nelements(w1)+ggml_nelements(w2)+ggml_nelements(w3);
+
+    //struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne);
+
+    result->op   = GGML_OP_FLASH_FF_GATED_BACK;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = w1;
+    result->src[2] = w2;
+    result->src[3] = w3;
+    result->src[4] = d;
+
+    return result;   
 }
 
 // ggml_win_part
@@ -16074,6 +16144,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
                 bool masked = t != 0;
                 ggml_compute_forward_flash_attn_back(params, tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3], masked, tensor);
             } break;
+        case GGML_OP_FLASH_FF_GATED:
+            {
+                ggml_compute_forward_flash_ff_gated(params, tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3], tensor);
+            } break;
+        case GGML_OP_FLASH_FF_GATED_BACK:
+            {
+                ggml_compute_forward_flash_ff_gated_back(params, tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3], tensor->src[4], tensor);
+            } break;
         case GGML_OP_WIN_PART:
             {
                 ggml_compute_forward_win_part(params, tensor->src[0], tensor);
@@ -17134,6 +17212,66 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
             {
                 GGML_ASSERT(false); // not supported
             } break;
+        case GGML_OP_FLASH_FF_GATED:
+            {
+                struct ggml_tensor * flash_grad = NULL;
+                size_t elemsize = 0;
+                if (tensor->src[0]->grad || tensor->src[1]->grad || tensor->src[2]->grad || tensor->src[3]->grad) {
+                    flash_grad = 
+                        ggml_flash_ff_gated_back(ctx,
+                            tensor->src[0],
+                            tensor->src[1],
+                            tensor->src[2],
+                            tensor->src[3],
+                            tensor->grad);
+                    GGML_ASSERT(!ggml_is_quantized(flash_grad->type));
+                    elemsize = ggml_type_size(flash_grad->type);
+                }
+                const int64_t nelements0 = ggml_nelements(tensor->src[0]);
+                const int64_t nelements1 = ggml_nelements(tensor->src[0]);
+                const int64_t nelements2 = ggml_nelements(tensor->src[0]);
+                const int64_t nelements3 = ggml_nelements(tensor->src[0]);
+                const size_t offset0 = 0;
+                const size_t offset1 = elemsize * nelements0;
+                const size_t offset2 = elemsize * (nelements0 + nelements1);
+                const size_t offset3 = elemsize * (nelements0 + nelements1 + nelements2);
+                if (tensor->src[0]->grad) {
+                    struct ggml_tensor * view_a = ggml_view_1d(ctx, flash_grad, nelements0, offset0);
+                    struct ggml_tensor * grad_a = ggml_reshape(ctx, view_a, tensor->src[0]->grad);
+                    tensor->src[0]->grad = ggml_add_or_set(ctx,
+                            tensor->src[0]->grad,
+                            grad_a,
+                            zero_table);
+                }
+                if (tensor->src[1]->grad) {
+                    struct ggml_tensor * view_w1 = ggml_view_1d(ctx, flash_grad, nelements1, offset1);
+                    struct ggml_tensor * grad_w1 = ggml_reshape(ctx, view_w1, tensor->src[1]->grad);
+                    tensor->src[1]->grad = ggml_add_or_set(ctx,
+                            tensor->src[1]->grad,
+                            grad_w1,
+                            zero_table);
+                }
+                if (tensor->src[2]->grad) {
+                    struct ggml_tensor * view_w2 = ggml_view_1d(ctx, flash_grad, nelements2, offset2);
+                    struct ggml_tensor * grad_w2 = ggml_reshape(ctx, view_w2, tensor->src[2]->grad);
+                    tensor->src[2]->grad = ggml_add_or_set(ctx,
+                            tensor->src[2]->grad,
+                            grad_w2,
+                            zero_table);
+                }
+                if (tensor->src[3]->grad) {
+                    struct ggml_tensor * view_w3 = ggml_view_1d(ctx, flash_grad, nelements3, offset3);
+                    struct ggml_tensor * grad_w3 = ggml_reshape(ctx, view_w3, tensor->src[3]->grad);
+                    tensor->src[3]->grad = ggml_add_or_set(ctx,
+                            tensor->src[3]->grad,
+                            grad_w3,
+                            zero_table);
+                }
+            } break;
+        case GGML_OP_FLASH_FF_GATED_BACK:
+            {
+                GGML_ASSERT(false); // not supported
+            } break;
         case GGML_OP_WIN_PART:
         case GGML_OP_WIN_UNPART:
         case GGML_OP_UNARY:
@@ -18026,6 +18164,11 @@ struct ggml_cplan ggml_graph_plan(struct ggml_cgraph * cgraph, int n_threads) {
                     }
 
                     work_size = MAX(work_size, cur);
+                } break;
+            case GGML_OP_FLASH_FF_GATED:
+            case GGML_OP_FLASH_FF_GATED_BACK:
+                {
+                    n_tasks = n_threads;
                 } break;
             case GGML_OP_WIN_PART:
             case GGML_OP_WIN_UNPART:

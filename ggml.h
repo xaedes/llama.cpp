@@ -394,6 +394,8 @@ extern "C" {
         GGML_OP_FLASH_ATTN,
         GGML_OP_FLASH_FF,
         GGML_OP_FLASH_ATTN_BACK,
+        GGML_OP_FLASH_FF_GATED,
+        GGML_OP_FLASH_FF_GATED_BACK,
         GGML_OP_WIN_PART,
         GGML_OP_WIN_UNPART,
         GGML_OP_GET_REL_POS,
@@ -1425,6 +1427,21 @@ extern "C" {
             struct ggml_tensor  * b1,
             struct ggml_tensor  * c0,
             struct ggml_tensor  * c1);
+
+    GGML_API struct ggml_tensor * ggml_flash_ff_gated(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * w1,
+            struct ggml_tensor  * w2,
+            struct ggml_tensor  * w3);
+
+    GGML_API struct ggml_tensor * ggml_flash_ff_gated_back(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * w1,
+            struct ggml_tensor  * w2,
+            struct ggml_tensor  * w3,
+            struct ggml_tensor  * d);
 
     // partition into non-overlapping windows with padding if needed
     // example:

@@ -1,0 +1,90 @@
+// ggml_mul_mat(a, b) == b @ a.T
+
+// gated feedforward part of llama
+t25 = ggml_mul_mat      (ctx, w3, t24);  // t24 @ w3.T
+t26 = ggml_mul_mat      (ctx, w1, t24);  // t24 @ w1.T
+t27 = ggml_silu         (ctx, t26);      // 
+t28 = ggml_mul          (ctx, t27, t25); // 
+t29 = ggml_mul_mat      (ctx, w2, t28);  // t28 @ w2.T
+
+// substitute by mathematical matrix multiplications '@'
+t29
+== t28 @ w2.T
+== (t27 .* t25) @ w2.T
+== (silu(t26) .* (t24 @ w3.T)) @ w2.T
+== (silu(t24 @ w1.T) .* (t24 @ w3.T)) @ w2.T
+
+// shape notation: tensor[cols,rows,rows2,rows3]
+
+// expand matrix multiplications '@' to dot
+t29[a,b] 
+== (t28 @ w2.T)[a,b]
+== dot((silu(t24 @ w1.T) .* (t24 @ w3.T))[:,b], w2.T[a,:])
+== dot((silu(t24 @ w1.T) .* (t24 @ w3.T))[:,b], w2[:,a])
+
+// single element of row
+(silu(t24 @ w1.T) .* (t24 @ w3.T))[c,b]
+== silu(t24 @ w1.T)[c,b] .* (t24 @ w3.T)[c,b]
+== silu((t24 @ w1.T)[c,b]) .* (t24 @ w3.T)[c,b]
+
+// single element of row, expand matrix multiplication
+(t24 @ w1.T)[c,b]
+== dot(t24[:,b], w1.T[c,:])
+== dot(t24[:,b], w1[:,c])
+
+// single element of row, expand matrix multiplication
+(t24 @ w3.T)[c,b]
+== dot(t24[:,b], w3.T[c,:])
+== dot(t24[:,b], w3[:,c])
+
+// forward pass
+for_parallel u,v,a:
+  for b:
+    t29[a,b,u,v] = 0
+    for c:
+        t29[a,b,u,v] += silu(dot(t24[:,b,u,v], w1[:,c,u,v])) * dot(t24[:,b,u,v], w3[:,c,u,v]) * w2[c,a,u,v]
+
+// TODO: check whether parallel actually works!
+
+// forward pass
+for_parallel u,v,a:
+  for b:
+    t29[a,b,u,v] = 0
+    for c:
+        // postorder:
+        PO1 = dot(t24[:,b,u,v], w1[:,c,u,v])
+        PO2 = silu(PO1)
+        PO3 = dot(t24[:,b,u,v], w3[:,c,u,v])
+        PO4 = PO2 * PO3
+        PO5 = PO4 * w2[c,a,u,v]
+        t29[a,b,u,v] += PO5
+
+// backward pass
+// given t29.G
+for_parallel u,v,a,b,c:
+    // need some values from forward pass
+    PO1 = dot(t24[:,b,u,v], w1[:,c,u,v])
+    PO2 = silu(PO1)
+    PO3 = dot(t24[:,b,u,v], w3[:,c,u,v])
+    PO4 = PO2 * PO3
+    // given t29.G[a,b,u,v]
+    // t29[a,b,u,v] += PO5
+    PO5.G = t29.G[a,b,u,v]
+    // PO5 = PO4 * w2[c,a,u,v]
+    PO4.G = PO5.G * w2[c,a,u,v]
+    w2.G[c,a,u,v] += PO5.G * PO4
+    // PO4 = PO2 * PO3
+    PO2.G = PO4.G * PO3
+    PO3.G = PO4.G * PO2
+    // PO3 = dot(t24[:,b,u,v], w3[:,c,u,v])
+    t24.G[:,b,u,v] += w3[:,c,u,v] * PO3.G
+    w3.G[:,c,u,v] += t24[:,b,u,v] * PO3.G
+    // mad(t24.G[:,b,u,v], w3[:,c,u,v], PO3.G)
+    // mad(w3.G[:,c,u,v], t24[:,b,u,v], PO3.G)
+    // PO2 = silu(PO1)
+    PO1.G = silu_back(PO1, PO2.G)
+    // PO1 = dot(t24[:,b,u,v], w1[:,c,u,v])
+    t24.G[:,b,u,v] += w1[:,c,u,v] * PO1.G
+    w1.G[:,c,u,v] += t24[:,b,u,v] * PO1.G
+    // mad(t24.G[:,b,u,v], w1[:,c,u,v], PO1.G)
+    // mad(w1.G[:,c,u,v], t24[:,b,u,v], PO1.G)
