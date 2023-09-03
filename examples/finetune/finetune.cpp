@@ -751,6 +751,285 @@ void assert_shape_4d(struct ggml_tensor * tensor, int64_t ne0, int64_t ne1, int6
     GGML_ASSERT(tensor->ne[3] == ne3);
 }
 
+/*
+Notation
+
+A[R,C] = tensor A with R rows and C cols
+A @ B  = mathematical matrix multiplication
+A.T    = transpose of matrix A
+
+GGML mul_mat to mathematical matrix multiplication '@'
+
+ggml_mul_mat(A[N,M], B[N,K])[M,K] --> (A[N,M].T[M,N] @ B[N,K])[M,K]
+
+Part of llama forward graph:
+
+t05 = ggml_mul_mat(ctx, ggml_add(ctx, layer.wq, ggml_mul_mat(ctx, llayer.wq_a, llayer.wq_b)), t04);
+
+Annotate with shapes:
+t05[E,N*B] = ggml_mul_mat(ctx, ggml_add(ctx, layer.wq[E,E], ggml_mul_mat(ctx, llayer.wq_a[4,E], llayer.wq_b[4,E])[E,E])[E,E], t04[E,N*B])[E,N*B];
+
+To mathematical notation:
+t05[E,N*B] = (wq[E,E] + wq_a[4,E].T[E,4] @ wq_b[4,E]).T @ t04[E,N*B]
+
+Split operations in post order:
+t05_1[E,4] = wq_a[4,E].T[E,4]
+t05_2[E,E] = t05_1[E,4] @ wq_b[4,E]
+t05_3[E,E] = wq[E,E] + t05_2[E,E]
+t05_4[E,E] = t05_3[E,E].T
+t05_5[E,N*B] = t05_4[E,E] @ t04[E,N*B]
+
+Enhance shape [E,E] to [E1,E2], to make sure we do not mess up the shapes:
+
+t05[E2,N*B] = (wq[E1,E2] + wq_a[4,E1].T[E1,4] @ wq_b[4,E2]).T[E2,E1] @ t04[E1,N*B]
+t05_1[E1,4] = wq_a[4,E1].T[E1,4]
+t05_2[E1,E2] = t05_1[E1,4] @ wq_b[4,E2]
+t05_3[E1,E2] = wq[E1,E2] + t05_2[E1,E2]
+t05_4[E2,E1] = t05_3[E1,E2].T[E2,E1]
+t05_5[E2,N*B] = t05_4[E2,E1] @ t04[E1,N*B]
+
+Backward pass by going in reverse order of post order operations:
+t05_5.G[E2,N*B]
+t05_4.G[E2,E1] = t05_5.G[E2,N*B] @ t04[E1,N*B].T[N*B,E1]
+t05_3.G[E1,E2] = t05_4.G[E2,E1].T[E1,E2]
+wq.G[E1,E2] = t05_3.G[E1,E2]
+t05_2.G[E1,E2] = t05_3.G[E1,E2]
+t05_1.G[E1,4] = t05_2.G[E1,E2] @ wq_b[4,E2].T[E2,4]
+wq_b.G[4,E2] = t05_1[E1,4].T @ t05_2.G[E1,E2]
+wq_a.G[4,E1] = t05_1.G[E1,4].T[4,E1]
+t04.G[E1,N*B] = t05_4[E2,E1].T[E1,E2] @ t05_5.G[E2,N*B]
+
+Substitute terms into wq_a.G
+wq_a.G[4,E1] = (t05_2.G[E1,E2] @ wq_b[4,E2].T[E2,4])[E1,4].T[4,E1]
+wq_a.G[4,E1] = (wq_b[4,E2] @ t05_2.G[E1,E2].T[E2,E1])
+wq_a.G[4,E1] = (wq_b[4,E2] @ t05_3.G[E1,E2].T[E2,E1])
+wq_a.G[4,E1] = (wq_b[4,E2] @ t05_4.G[E2,E1].T[E1,E2].T[E2,E1])
+wq_a.G[4,E1] = (wq_b[4,E2] @ t05_4.G[E2,E1])
+wq_a.G[4,E1] = (wq_b[4,E2] @ (t05_5.G[E2,N*B] @ t04[E1,N*B].T[N*B,E1])[E2,E1])
+
+We do a big matrix multiplication (t05_5.G @ t04.T), which could be avoided by using associativity of '@'.
+A @ B @ C == (A @ B) @ C == A @ (B @ C)
+
+Rewrite to -->
+wq_a.G[4,E1] = ((wq_b[4,E2] @ t05_5.G[E2,N*B])[4,N*B] @ t04[E1,N*B].T[N*B,E1])
+
+The same for wq_b.G:
+
+wq_b.G[4,E2] = t05_1[E1,4].T @ t05_2.G[E1,E2]
+wq_b.G[4,E2] = t05_1[E1,4].T @ t05_4.G[E2,E1].T[E1,E2]
+wq_b.G[4,E2] = t05_1[E1,4].T @ (t05_5.G[E2,N*B] @ t04[E1,N*B].T[N*B,E1]).T[E1,E2]
+wq_b.G[4,E2] = t05_1[E1,4].T @ t04[E1,N*B] @ t05_5.G[E2,N*B].T[N*B,E2]
+
+Rewrite to -->
+wq_b.G[4,E2] = (t05_1[E1,4].T @ t04[E1,N*B])[4,N*B] @ t05_5.G[E2,N*B].T[N*B,E2]
+
+Automatically rewriting multiplication factors to use different associativity, can improve runtime and memory requirements.
+*/
+
+enum TermType {
+    TERM_TYPE_FACTOR  = 0,
+    TERM_TYPE_LEFT    = 1,
+    TERM_TYPE_RIGHT   = 2,
+    TERM_TYPE_MAT_MUL = 3
+};
+
+struct FactorStats {
+    int64_t n_factors;
+    int64_t flops;
+    int64_t flops_total;
+    int64_t n_elements;
+    int64_t n_elements_total;
+};
+
+struct FactorStats make_factor_stats(int64_t n_factors, int64_t flops, int64_t n_elements) {
+    struct FactorStats stats;
+    stats.n_factors = n_factors;
+    stats.flops = flops;
+    stats.flops_total = flops;
+    stats.n_elements = n_elements;
+    stats.n_elements_total = n_elements;
+    return stats;
+}
+
+void aggregate_factor_stats(struct FactorStats * aggregate, struct FactorStats stats) {
+    aggregate->n_factors += stats.n_factors;
+    aggregate->flops_total += stats.flops;
+    aggregate->n_elements_total += stats.n_elements;
+}
+
+struct Term {
+    enum TermType type;
+    struct ggml_tensor * node;
+    bool transposed;
+    struct FactorStats stats;
+};
+
+FactorStats find_factors(
+        struct ggml_tensor * n,
+        bool transposed,
+        std::vector<Term> & terms,
+        std::unordered_map<void*, bool> & visited) {
+
+    auto found_factors = [](
+            std::vector<Term> & terms,
+            std::unordered_map<void*, bool> & visited,
+            int64_t flops,
+            struct ggml_tensor * n, bool transposed,
+            struct ggml_tensor * lhs, bool lhs_transposed, 
+            struct ggml_tensor * rhs, bool rhs_transposed) -> FactorStats {
+        struct FactorStats stats = make_factor_stats(0, flops, ggml_nelements(n));
+        size_t begin = terms.size();
+        terms.push_back({TERM_TYPE_LEFT, n, transposed});
+        aggregate_factor_stats(&stats, find_factors(lhs, lhs_transposed, terms, visited));
+        terms.push_back({TERM_TYPE_MAT_MUL, NULL, false});
+        aggregate_factor_stats(&stats, find_factors(rhs, rhs_transposed, terms, visited));
+        size_t end = terms.size();
+        terms.push_back({TERM_TYPE_RIGHT, n, transposed});
+        terms[begin].stats = stats;
+        terms[end].stats = stats;
+        return stats;
+    };
+    if (n->op == GGML_OP_TRANSPOSE) {
+        return find_factors(n->src[0], !transposed, terms, visited);
+    } else if (n->op == GGML_OP_MUL_MAT) {
+        visited[n] = true;
+        // ggml_mul_mat(a with ne=[X,YA,Z,W], b with ne=[X,YB,Z,W]) 
+        // results in shape [YA,YB,Z,W]
+        // ne=[X,Y,Z,W] X are math. matrix columns, Y are math. matrix rows
+        // c == ggml_mul_mat(a, b)
+        // equivalent to mathematical c == (a @ b.T).T == b @ a.T
+        struct ggml_tensor * a = n->src[0];
+        struct ggml_tensor * b = n->src[1];
+        int64_t flops = (2*a->ne[0]-1)*a->ne[1]*b->ne[1]*a->ne[2]*a->ne[3];
+        if (transposed) {
+            // resolve transpose
+            // (b @ a.T).T == a @ b.T
+            return found_factors(terms, visited, flops, n, transposed, a, false, b, true);
+        } else {
+            // b @ a.T
+            return found_factors(terms, visited, flops, n, transposed, b, false, a, true);
+        }
+    } else if (n->op == GGML_OP_OUT_PROD) {
+        visited[n] = true;
+        // ggml_out_prod(a with ne=[XA,Y,Z,W], b with ne=[XB,Y,Z,W]) 
+        // results in shape [XA,XB,Z,W]
+        // c == ggml_out_prod(a, b)
+        // equivalent to mathematical c == b.T @ a
+        struct ggml_tensor * a = n->src[0];
+        struct ggml_tensor * b = n->src[1];
+        int64_t flops = (2*a->ne[1]-1)*a->ne[0]*b->ne[0]*a->ne[2]*a->ne[3];
+        if (transposed) {
+            // resolve transpose
+            // (b.T @ a).T == a.T @ b
+            return found_factors(terms, visited, flops, n, transposed, a, true, b, false);
+        } else {
+            // b.T @ a
+            return found_factors(terms, visited, flops, n, transposed, b, true, a, false);
+        }
+    } else {
+        struct FactorStats stats = make_factor_stats(1, 0, ggml_nelements(n));
+        terms.push_back({TERM_TYPE_FACTOR, n, transposed, stats});
+        return stats;
+    }
+};
+void analyze_graph(struct ggml_cgraph * graph) {
+    // find matrix multiplication terms, resolving matrix transposes (A @ B).T ==> (B.T @ A.T)
+
+    std::unordered_map<void*, bool> visited;
+    std::vector<Term> terms;
+
+    auto print_shape = [](const int64_t * ne, int nd) -> void {
+        printf("[");
+        for (int d = 0; d<nd; ++d) {
+            if (d>0) {
+                printf(",");
+            }
+            printf("%lld", ne[d]);
+        }
+        printf("]");
+    };
+    auto transpose_shape = [](int64_t * neT, int64_t * ne) -> void {
+        neT[0] = ne[1];
+        neT[1] = ne[0];
+        neT[2] = ne[2];
+        neT[3] = ne[3];
+    };
+    auto print_factor_shape = [&print_shape, &transpose_shape](const Term& term) -> void {
+        // it is easier to follow multiplication term shapes,
+        // when printing them transposed as [Rows,Cols,...]
+        int64_t neT[4];
+        transpose_shape(neT, term.node->ne);
+        print_shape(neT, term.node->n_dims);
+        if (term.transposed) {
+            printf(".T");
+            print_shape(term.node->ne, term.node->n_dims);
+        }
+    };
+    auto print_term_shape = [&print_shape, &transpose_shape](const Term& term) -> void {
+        // it is easier to follow multiplication term shapes,
+        // when printing them transposed as [Rows,Cols,...]
+        if (term.transposed) {
+            print_shape(term.node->ne, term.node->n_dims);
+        } else {
+            int64_t neT[4];
+            transpose_shape(neT, term.node->ne);
+            print_shape(neT, term.node->n_dims);
+        }
+    };
+
+    struct FactorStats stats_total = make_factor_stats(0,0,0);
+    struct FactorStats stats_total2 = make_factor_stats(0,0,0);
+    for (int i = 0; i < graph->n_nodes; ++i) {
+        int ir = graph->n_nodes-1-i;
+        struct ggml_tensor * n = graph->nodes[ir];
+        if (visited.count(n) > 0) {
+            continue;
+        }
+        terms.clear();
+        struct FactorStats stats = find_factors(n, false, terms, visited);
+        if (stats.n_factors > 1) {
+            aggregate_factor_stats(&stats_total, stats);
+        }
+        if (stats.n_factors > 2) {
+            aggregate_factor_stats(&stats_total2, stats);
+        }
+
+        if (stats.n_factors > 1) {
+            printf("n_factors=%d ", stats.n_factors);
+            bool printed_first_factor = false;
+            for (unsigned k = 0; k < terms.size(); ++k) {
+                const auto& term = terms[k];
+                if (term.type == TERM_TYPE_FACTOR) {
+                    printf("%s['%s']", ggml_op_name(term.node->op), ggml_get_name(term.node));
+                    print_factor_shape(term);
+                } else if (term.type == TERM_TYPE_LEFT) {
+                    // printf("%s['%s']", ggml_op_name(term.node->op), ggml_get_name(term.node));
+                    printf("(");
+                } else if (term.type == TERM_TYPE_RIGHT) {
+                    printf(")");
+                    print_term_shape(term);
+                    printf("{FLOPS=%lld, FLOPS_TOTAL=%lld, ELEMS=%lld, ELEMS_TOTAL=%lld}", 
+                        term.stats.flops,
+                        term.stats.flops_total,
+                        term.stats.n_elements,
+                        term.stats.n_elements_total);
+                } else if (term.type == TERM_TYPE_MAT_MUL) {
+                    printf(" @ ");
+                }
+            }
+            printf("\n");
+        }
+    }
+    printf("all mat muls:  {FLOPS_TOTAL=%lld, ELEMS_TOTAL=%lld}\n", 
+        stats_total.flops_total,
+        stats_total.n_elements_total);
+    printf("n_factors > 2: {FLOPS_TOTAL=%lld, ELEMS_TOTAL=%lld}\n", 
+        stats_total2.flops_total,
+        stats_total2.n_elements_total);
+    // stats_total2.flops_total is roughly 1% of stats_total.flops_total
+    // so we can at most save 1% of stats_total.flops_total
+}
+
 struct ggml_tensor * llama_build_lora_finetune_graphs(
         struct my_llama_model * model,
         struct my_llama_lora  * lora,
@@ -2680,6 +2959,9 @@ int main(int argc, char ** argv) {
         params.use_checkpointing
     );
     ggml_allocr_free(alloc);
+
+    analyze_graph(gb);
+    GGML_ASSERT(false);
 
     // tokenize data
     std::vector<llama_token> train_tokens;
