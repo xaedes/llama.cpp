@@ -3920,6 +3920,7 @@ static void ggml_setup_op_has_task_pass(void) {
         p[GGML_OP_CONV_2D                ] = true;
         p[GGML_OP_CONV_TRANSPOSE_2D      ] = true;
         p[GGML_OP_FLASH_ATTN_BACK        ] = true;
+        p[GGML_OP_FLASH_FF_GATED         ] = true;
         p[GGML_OP_CROSS_ENTROPY_LOSS     ] = true;
         p[GGML_OP_ADD_REL_POS            ] = true;
     }
@@ -15249,7 +15250,14 @@ static void ggml_compute_forward_flash_ff_gated_f32(
     GGML_ASSERT(nbw10 == sizeof(float));
     GGML_ASSERT(nbw30 == sizeof(float));
 
+    const int ith = params->ith;
+    const int nth = params->nth;
+
     if (params->type == GGML_TASK_INIT) {
+        // TODO add task_init to this op and set dst to zero
+        if (ith == 0) {
+            memset(dst->data, 0, ggml_nbytes(dst));
+        }
         return;
     }
 
@@ -15257,11 +15265,8 @@ static void ggml_compute_forward_flash_ff_gated_f32(
         return;
     }
 
-    // parallelize by ne0,ne1,ne2,ne3
-    const int nr = ne0*ne1*ne2*ne3;
-
-    const int ith = params->ith;
-    const int nth = params->nth;
+    // parallelize by ne1,ne2,ne3
+    const int nr = ne1*ne2*ne3;
 
     // rows per thread
     const int dr = (nr + nth - 1)/nth;
@@ -15269,6 +15274,18 @@ static void ggml_compute_forward_flash_ff_gated_f32(
     // row range for this thread
     const int ir0 = dr*ith;
     const int ir1 = MIN(ir0 + dr, nr);
+
+    // guarantee that no two threads share the same i1
+    int i1_min = ne1;
+    int i1_max = 0;
+    for (int ir = ir0; ir < ir1; ++ir) {
+        const int i3   = ir/(ne1*ne2);
+        const int i2   = (ir - i3*ne1*ne2)/(ne1);
+        const int i1   = (ir - i3*ne1*ne2 - i2*ne1);
+        i1_min = MIN(i1_min, i1);
+        i1_max = MAX(i1_max, i1);
+    }
+    printf("%s: ith_=%d i1_min=%d i1_max=%d\n", __func__, ith, i1_min, i1_max);
 
     // ggml operations to mathematical operations:
     // mul_mat(A,B) == B @ A.T  (B.ne[0] == number of columns in B, etc.)
@@ -15298,14 +15315,19 @@ static void ggml_compute_forward_flash_ff_gated_f32(
     // =dot(a[:,i1], w3[:,iw20])
 
     for (int ir = ir0; ir < ir1; ++ir) {
-        const int i3 = ir/(ne0*ne1*ne2);
-        const int i2 = (ir - i3*ne0*ne1*ne2)/(ne0*ne1);
-        const int i1 = (ir - i3*ne0*ne1*ne2 - i2*ne0*ne1)/ne0;
-        const int i0 = ir - i3*ne0*ne1*ne2 - i2*ne0*ne1 - i1*ne0;
+        const int i3   = ir/(ne1*ne2);
+        const int i2   = (ir - i3*ne1*ne2)/(ne1);
+        const int i1   = (ir - i3*ne1*ne2 - i2*ne1);
 
-        // dst[i0,i1] = dot((silu(a @ w1.T) .* (a @ w3.T))[:,i1], w2[:,i0])
-        ggml_float dot_sum = 0.0;
         for (int iw20 = 0; iw20 < new20; ++iw20) {
+
+            // performance issue:
+            // dot(a[:,i1], w1[:,iw20]) and dot(a[:,i1], w3[:,iw20]) are recomputed ne0 times!
+            // swap loops i0 and iw20, so that i0 is inner loop.
+            // but now we can't add complete dot sum for dst[i0,i1] in inner loop.
+            // instead we need to accumulate directly into dst[i0,i1].
+            // for this we must guarantee that no two threads share the same i1.
+
             // (a @ w1.T)[iw20,i1]=dot(a[:,i1], w1[:,iw20])
             float dot_a_w1;
             ggml_vec_dot_f32(nea0,
@@ -15328,11 +15350,14 @@ static void ggml_compute_forward_flash_ff_gated_f32(
             const float silu_dot_a_w1 = ggml_silu_f32(dot_a_w1);
 #endif
             const float lhs = silu_dot_a_w1 * dot_a_w3;
-            const float rhs = (* (float *) (char *) w2->data + iw20*nbw20 + i0*nbw21 + i2*nbw22 + i3*nbw23);
-            const float lhs_rhs = lhs*rhs;
-            dot_sum += (ggml_float) lhs_rhs;
+
+            // dst[i0,i1] = dot((silu(a @ w1.T) .* (a @ w3.T))[:,i1], w2[:,i0])
+            for (int i0 = 0; i0 < ne0; ++i0) {
+                const float rhs = (* (float *) (char *) w2->data + iw20*nbw20 + i0*nbw21 + i2*nbw22 + i3*nbw23);
+                const float lhs_rhs = lhs*rhs;
+                * ((float *) (char *) dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3) += lhs_rhs;
+            }
         }
-        * ((float *) (char *) dst->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3) = (float) dot_sum;
     }
 }
 
@@ -15493,13 +15518,13 @@ static void ggml_compute_forward_flash_ff_gated_back_f32(
                         float dot_a_w1;
                         ggml_vec_dot_f32(nea0,
                                 &dot_a_w1,
-                                (char *) a->data  + i1*nba1  + i2*nba2  + i3*nba3,
+                                (char *) a->data  + i1*nba1    + i2*nba2  + i3*nba3,
                                 (char *) w1->data + iw20*nbw11 + i2*nbw12 + i3*nbw13);
                         // (a @ w3.T)[iw20,i1]=dot(a[:,i1], w3[:,iw20])
                         float dot_a_w3;
                         ggml_vec_dot_f32(nea0,
                                 &dot_a_w3,
-                                (char *) a->data  + i1*nba1  + i2*nba2  + i3*nba3,
+                                (char *) a->data  + i1*nba1    + i2*nba2  + i3*nba3,
                                 (char *) w3->data + iw20*nbw31 + i2*nbw32 + i3*nbw33);
                         // (silu(a @ w1.T) .* (a @ w3.T))[iw20,i1]
 #ifdef GGML_SILU_FP16
