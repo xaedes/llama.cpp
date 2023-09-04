@@ -897,13 +897,13 @@ struct ggml_tensor * llama_build_lora_finetune_graphs(
         struct ggml_tensor * t24 = ggml_mul          (ctx, t23, t22);                               set_name(t24, "t24");     assert_shape_2d(t24, n_embd, N*n_batch);
         struct ggml_tensor * t29;
         if (enable_flash_ff) {
-            t29 = ggml_flash_ff_gated(ctx, t24, w1, w2, w3);
+            t29 = ggml_flash_ff_gated(ctx, t24, w1, w2, w3);                                        set_name(t29, "t29");     assert_shape_2d(t29, n_embd, N*n_batch);
         } else {
-            struct ggml_tensor * t25 = ggml_mul_mat      (ctx, w3, t24);                                set_name(t25, "t25");     assert_shape_2d(t25, n_ff, N*n_batch);
-            struct ggml_tensor * t26 = ggml_mul_mat      (ctx, w1, t24);                                set_name(t26, "t26");     assert_shape_2d(t26, n_ff, N*n_batch);
-            struct ggml_tensor * t27 = ggml_silu         (ctx, t26);                                    set_name(t27, "t27");     assert_shape_2d(t27, n_ff, N*n_batch);
-            struct ggml_tensor * t28 = ggml_mul          (ctx, t27, t25);                               set_name(t28, "t28");     assert_shape_2d(t28, n_ff, N*n_batch);
-            t29 = ggml_mul_mat      (ctx, w2, t28);                                set_name(t29, "t29");     assert_shape_2d(t29, n_embd, N*n_batch);
+            struct ggml_tensor * t25 = ggml_mul_mat      (ctx, w3, t24);                            set_name(t25, "t25");     assert_shape_2d(t25, n_ff, N*n_batch);
+            struct ggml_tensor * t26 = ggml_mul_mat      (ctx, w1, t24);                            set_name(t26, "t26");     assert_shape_2d(t26, n_ff, N*n_batch);
+            struct ggml_tensor * t27 = ggml_silu         (ctx, t26);                                set_name(t27, "t27");     assert_shape_2d(t27, n_ff, N*n_batch);
+            struct ggml_tensor * t28 = ggml_mul          (ctx, t27, t25);                           set_name(t28, "t28");     assert_shape_2d(t28, n_ff, N*n_batch);
+            t29 = ggml_mul_mat      (ctx, w2, t28);                                                 set_name(t29, "t29");     assert_shape_2d(t29, n_embd, N*n_batch);
         }
         struct ggml_tensor * t30 = ggml_add          (ctx, t29, t21);                               set_name(t30, "t30");     assert_shape_2d(t30, n_embd, N*n_batch);
         cur = t30;
