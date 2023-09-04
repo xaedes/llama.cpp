@@ -7539,7 +7539,7 @@ struct ggml_tensor * ggml_flash_ff_gated(
         struct ggml_tensor  * w2,
         struct ggml_tensor  * w3) {
     GGML_ASSERT(ggml_can_mul_mat(w1, a));
-    GGML_ASSERT(ggml_can_mul_mat(w2, a));
+    GGML_ASSERT(ggml_can_mul_mat(w3, a));
 
     bool is_node = false;
 
@@ -7570,7 +7570,7 @@ struct ggml_tensor * ggml_flash_ff_gated_back(
         struct ggml_tensor  * w3,
         struct ggml_tensor  * g) {
     GGML_ASSERT(ggml_can_mul_mat(w1, a));
-    GGML_ASSERT(ggml_can_mul_mat(w2, a));
+    GGML_ASSERT(ggml_can_mul_mat(w3, a));
 
     bool is_node = false;
 
@@ -15310,14 +15310,14 @@ static void ggml_compute_forward_flash_ff_gated_f32(
             float dot_a_w1;
             ggml_vec_dot_f32(nea0,
                     &dot_a_w1,
-                    (char *) a->data  + i1*nba1  + i2*nba2  + i3*nba3,
-                    (char *) w1->data + i1*nbw11 + i2*nbw12 + i3*nbw13);
+                    (char *) a->data  + i1*nba1    + i2*nba2  + i3*nba3,
+                    (char *) w1->data + iw20*nbw11 + i2*nbw12 + i3*nbw13);
             // (a @ w3.T)[iw20,i1]=dot(a[:,i1], w3[:,iw20])
             float dot_a_w3;
             ggml_vec_dot_f32(nea0,
                     &dot_a_w3,
-                    (char *) a->data  + i1*nba1  + i2*nba2  + i3*nba3,
-                    (char *) w3->data + i1*nbw31 + i2*nbw32 + i3*nbw33);
+                    (char *) a->data  + i1*nba1    + i2*nba2  + i3*nba3,
+                    (char *) w3->data + iw20*nbw31 + i2*nbw32 + i3*nbw33);
             // (silu(a @ w1.T) .* (a @ w3.T))[iw20,i1]
 #ifdef GGML_SILU_FP16
             const ggml_fp16_t dot_a_w1_fp16 = GGML_FP32_TO_FP16(dot_a_w1);
