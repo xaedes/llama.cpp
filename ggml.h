@@ -1441,7 +1441,7 @@ extern "C" {
             struct ggml_tensor  * w1,
             struct ggml_tensor  * w2,
             struct ggml_tensor  * w3,
-            struct ggml_tensor  * d);
+            struct ggml_tensor  * g);
 
     // partition into non-overlapping windows with padding if needed
     // example:
