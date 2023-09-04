@@ -15511,6 +15511,73 @@ static void ggml_compute_forward_flash_ff_gated_back_f32(
         for (int i2 = 0; i2 < ne2; ++i2) {
             for (int i1 = 0; i1 < ne1; ++i1) {
                 for (int i0 = 0; i0 < ne0; ++i0) {
+                    // the inner-most for loop will add to gradients:
+                    //  gw2[iw20,  i0,  i2,i3] += g_rhs
+                    //  ga [0:nea0,i1,  i2,i3] += g_dot_a_w3 * w3[:,iw20]
+                    //  gw3[0:nea0,iw20,i2,i3] += g_dot_a_w3 * a [:,i1]
+                    //  ga [0:nea0,i1,  i2,i3] += g_dot_a_w1 * w1[:,iw20]
+                    //  gw1[0:nea0,iw20,i2,i3] += g_dot_a_w1 * a [:,i1]
+                    //
+                    //  consider different single axis parallelizations:
+                    //  - parallelize by iw2:
+                    //    - different threads can have same i0
+                    //      - competing:
+                    //        - gw2[iw20,  i0,  i2,i3] += ...
+                    //    - different threads can have same i1
+                    //      - competing:
+                    //        - ga [0:nea0,i1,  i2,i3] += ... (w3)
+                    //        - ga [0:nea0,i1,  i2,i3] += ... (w1)
+                    //  - parallelize by i0:
+                    //    - different threads can have same iw2
+                    //      - competing:
+                    //        - gw2[iw20,  i0,  i2,i3] += ...
+                    //        - gw3[0:nea0,iw20,i2,i3] += ...
+                    //        - gw1[0:nea0,iw20,i2,i3] += ...
+                    //    - different threads can have same i1
+                    //      - competing:
+                    //        - ga [0:nea0,i1,  i2,i3] += ... (w3)
+                    //        - ga [0:nea0,i1,  i2,i3] += ... (w1)
+                    //  - parallelize by i1:
+                    //    - different threads can have same i0
+                    //      - competing:
+                    //        - gw2[iw20,  i0,  i2,i3] += ...
+                    //    - different threads can have same iw2
+                    //      - competing:
+                    //        - gw2[iw20,  i0,  i2,i3] += ...
+                    //        - gw3[0:nea0,iw20,i2,i3] += ...
+                    //        - gw1[0:nea0,iw20,i2,i3] += ...
+                    //
+                    //  single axis parallelization by i0,i 1 or iw20 always has competing additions.
+                    //
+                    //  this can be solved by giving each thread its own copy of ga,gw1,gw2,gw3 to add to,
+                    //  and then finalize by summing the gradients from each thread.
+                    //  giving each thread a full copy of all the gradients will result in large temporary memory.
+                    //  each thread will not necessarily write to all values, so we don't actually need a full copy,
+                    //  but only the part where it writes to.
+                    //
+                    //  we want to have minimal size of the part where each thread writes to.
+                    //
+                    //  the index combinations (i0,i1,iw20) of the three axes build a cube of size [nea0,nea1,new20].
+                    //  split the cube along each axis into blocks [numblka0, numblka1, nmblkw20]  with block size
+                    //  of at most [neblka0, neblka1, neblkw20].
+                    //    numblka0  = (nea0+neblka0-1)/neblka0
+                    //    numblka1  = (nea1+neblka1-1)/neblka1
+                    //    numblkw20 = (new20+neblkw20-1)/neblkw20
+                    //  each block is indexed by [iblka0, iblka1, iblkw20].
+                    //  each block contains indices (i0,i1,iw20)
+                    //  from
+                    //    begin_i0   = iblka0*neblka0
+                    //    begin_i1   = iblka1*neblka1
+                    //    begin_iw20 = iblkw20*neblkw20
+                    //  upto (exclusive)
+                    //    end_i0   = min(nea0,  (iblka0+1)*neblka0)
+                    //    end_i1   = min(nea1,  (iblka1+1)*neblka1)
+                    //    end_iw20 = min(new20, (iblkw20+1)*neblkw20)
+                    //  each block has its own gradients for adding to:
+                    //    - ga [0:nea0,              begin_i1  :end_i1,   0:nea2, 0:nea3]
+                    //    - gw1[0:nea0,              begin_iw20:end_iw20, 0:nea2, 0:nea3]
+                    //    - gw2[begin_iw20:end_iw20, begin_i0  :end_i0,   0:nea2, 0:nea3]
+                    //    - gw3[0:nea0,              begin_iw20:end_iw20, 0:nea2, 0:nea3]
                     const float g_dot_sum = * (float *) (char *) g->data + i0*nb0 + i1*nb1 + i2*nb2 + i3*nb3;
                     for (int iw20 = 0; iw20 < new20; ++iw20) {
                         // forward pass (see ggml_compute_forward_flash_ff_gated_f32)
