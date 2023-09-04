@@ -765,6 +765,7 @@ struct ggml_tensor * llama_build_lora_finetune_graphs(
         const  int              n_tokens,
         const  int              n_batch,
         const  bool             enable_flash_attn,
+        const  bool             enable_flash_ff,
         const  bool             enable_checkpointing) {
 
     ggml_set_scratch(ctx, { 0, 0, nullptr, });
@@ -894,11 +895,16 @@ struct ggml_tensor * llama_build_lora_finetune_graphs(
         struct ggml_tensor * t22 = ggml_rms_norm     (ctx, t21, rms_norm_eps);                      set_name(t22, "t22");     assert_shape_2d(t22, n_embd, N*n_batch);
         struct ggml_tensor * t23 = ggml_repeat       (ctx, ffn_norm, t22);                          set_name(t23, "t23");     assert_shape_2d(t23, n_embd, N*n_batch);
         struct ggml_tensor * t24 = ggml_mul          (ctx, t23, t22);                               set_name(t24, "t24");     assert_shape_2d(t24, n_embd, N*n_batch);
-        struct ggml_tensor * t25 = ggml_mul_mat      (ctx, w3, t24);                                set_name(t25, "t25");     assert_shape_2d(t25, n_ff, N*n_batch);
-        struct ggml_tensor * t26 = ggml_mul_mat      (ctx, w1, t24);                                set_name(t26, "t26");     assert_shape_2d(t26, n_ff, N*n_batch);
-        struct ggml_tensor * t27 = ggml_silu         (ctx, t26);                                    set_name(t27, "t27");     assert_shape_2d(t27, n_ff, N*n_batch);
-        struct ggml_tensor * t28 = ggml_mul          (ctx, t27, t25);                               set_name(t28, "t28");     assert_shape_2d(t28, n_ff, N*n_batch);
-        struct ggml_tensor * t29 = ggml_mul_mat      (ctx, w2, t28);                                set_name(t29, "t29");     assert_shape_2d(t29, n_embd, N*n_batch);
+        struct ggml_tensor * t29;
+        if (enable_flash_ff) {
+            t29 = ggml_flash_ff_gated(ctx, t24, w1, w2, w3);
+        } else {
+            struct ggml_tensor * t25 = ggml_mul_mat      (ctx, w3, t24);                                set_name(t25, "t25");     assert_shape_2d(t25, n_ff, N*n_batch);
+            struct ggml_tensor * t26 = ggml_mul_mat      (ctx, w1, t24);                                set_name(t26, "t26");     assert_shape_2d(t26, n_ff, N*n_batch);
+            struct ggml_tensor * t27 = ggml_silu         (ctx, t26);                                    set_name(t27, "t27");     assert_shape_2d(t27, n_ff, N*n_batch);
+            struct ggml_tensor * t28 = ggml_mul          (ctx, t27, t25);                               set_name(t28, "t28");     assert_shape_2d(t28, n_ff, N*n_batch);
+            t29 = ggml_mul_mat      (ctx, w2, t28);                                set_name(t29, "t29");     assert_shape_2d(t29, n_embd, N*n_batch);
+        }
         struct ggml_tensor * t30 = ggml_add          (ctx, t29, t21);                               set_name(t30, "t30");     assert_shape_2d(t30, n_embd, N*n_batch);
         cur = t30;
         if (enable_checkpointing) {
@@ -1762,6 +1768,7 @@ struct train_params {
     bool samples_start_after_nl;
     bool use_adam;
     bool use_flash;
+    bool use_flash_ff;
     bool use_checkpointing;
 
     // only adam
@@ -1836,6 +1843,7 @@ struct train_params get_default_train_params() {
     params.samples_start_after_nl = false;
     params.use_adam               = true;
     params.use_flash              = true;
+    params.use_flash_ff           = true;
     params.use_checkpointing      = true;
 
     params.opt_past               = 0;
@@ -1902,6 +1910,8 @@ void train_print_usage(int /*argc*/, char ** argv, const struct train_params * p
     fprintf(stderr, "  --use-adam                 Use Adam optimizer (default)\n");
     fprintf(stderr, "  --no-flash                 Don't use flash attention \n");
     fprintf(stderr, "  --use-flash                Use flash attention (default)\n");
+    fprintf(stderr, "  --no-flash-ff              Don't use flash feedforward \n");
+    fprintf(stderr, "  --use-flash-ff             Use flash feedforward (default)\n");
     fprintf(stderr, "  --no-checkpointing         Don't use gradient checkpointing\n");
     fprintf(stderr, "  --use-checkpointing        Use gradient checkpointing (default)\n");
     fprintf(stderr, "  --no-alloc                 Don't use allocator\n");
@@ -2130,6 +2140,10 @@ bool train_params_parse(int argc, char ** argv, struct train_params * params) {
             params->use_flash = false;
         } else if (arg == "--use-flash") {
             params->use_flash = true;
+        } else if (arg == "--no-flash-ff") {
+            params->use_flash_ff = false;
+        } else if (arg == "--use-flash-ff") {
+            params->use_flash_ff = true;
         } else if (arg == "--no-checkpointing") {
             params->use_checkpointing = false;
         } else if (arg == "--use-checkpointing") {
@@ -2653,6 +2667,7 @@ int main(int argc, char ** argv) {
         &logits, tokens_input, target_probs,
         n_tokens, n_batch,
         params.use_flash,
+        params.use_flash_ff,
         params.use_checkpointing
     );
     size_t max_compute_size = ggml_allocr_max_size(alloc) + tensor_alignment;
@@ -2677,6 +2692,7 @@ int main(int argc, char ** argv) {
         &logits, tokens_input, target_probs,
         n_tokens, n_batch,
         params.use_flash,
+        params.use_flash_ff,
         params.use_checkpointing
     );
     ggml_allocr_free(alloc);
