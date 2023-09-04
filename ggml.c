@@ -15359,6 +15359,10 @@ static void ggml_compute_forward_flash_ff_gated_f32(
             }
         }
     }
+
+    // memory requirement tests show that using flash_ff_gated has the same effect as using gradient checkpointing.
+    // in some cases when gradient checkpointing is enabled, flash_ff_gated requires slightly more than normal feedforward.
+    // --> makes no sense to pursue further
 }
 
 static void ggml_compute_forward_flash_ff_gated(
