@@ -451,6 +451,13 @@ extern "C" {
 
     static const size_t GGML_OBJECT_SIZE = sizeof(struct ggml_object);
 
+    enum ggml_eval_order {
+        GGML_EVAL_ORDER_ANY = 0,
+        GGML_EVAL_ORDER_LEFT_TO_RIGHT,
+        GGML_EVAL_ORDER_RIGHT_TO_LEFT,
+        GGML_EVAL_ORDER_COUNT
+    };
+
     // n-dimensional tensor
     struct ggml_tensor {
         enum ggml_type    type;
@@ -488,6 +495,8 @@ extern "C" {
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
+        enum ggml_eval_order eval_order;
+
         char padding[4];
     };
 
@@ -516,12 +525,6 @@ extern "C" {
     // #define GGML_GRAPH_HASHTABLE_SIZE 16411
     #define GGML_GRAPH_HASHTABLE_SIZE 32771
 
-    enum ggml_cgraph_eval_order {
-        GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT = 0,
-        GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT,
-        GGML_CGRAPH_EVAL_ORDER_COUNT
-    };
-
     // computation graph
     struct ggml_cgraph {
         int n_nodes;
@@ -533,7 +536,7 @@ extern "C" {
 
         void * visited_hash_table[GGML_GRAPH_HASHTABLE_SIZE];
 
-        enum ggml_cgraph_eval_order order;
+        enum ggml_eval_order order;
 
         // performance
         int     perf_runs;
