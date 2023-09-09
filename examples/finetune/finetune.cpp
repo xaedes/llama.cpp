@@ -766,6 +766,37 @@ void assert_shape_4d(struct ggml_tensor * tensor, int64_t ne0, int64_t ne1, int6
     GGML_ASSERT(tensor->ne[3] == ne3);
 }
 
+void reorder_graph(struct ggml_cgraph * g, enum ggml_eval_order graph_order, bool roots_reverse) {
+    std::unordered_map<struct ggml_tensor *, int> n_used;
+    for (int i=0; i<g->n_nodes; ++i) {
+        struct ggml_tensor * n = g->nodes[i];
+        for (int k=0; k<GGML_MAX_SRC; ++k) {
+            struct ggml_tensor * s = n->src[k];
+            if (!s) continue;
+            if (n_used.count(s) == 0) {
+                n_used[s] = 1;
+            } else {
+                ++n_used[s];
+            }
+        }
+    }
+    std::vector<struct ggml_tensor *> roots;
+    for (int i=0; i<g->n_nodes; ++i) {
+        struct ggml_tensor * n = g->nodes[i];
+        if (n_used.count(n) == 0 || n_used[n] == 0) {
+            roots.push_back(n);
+        }
+    }
+    g->n_nodes = 0;
+    g->n_leafs = 0;
+    memset(g->visited_hash_table, 0, sizeof(g->visited_hash_table));
+    g->order = graph_order;
+    for (int i=0; i<roots.size(); ++i) {
+        int k = roots_reverse ? (roots.size()-1-i) : i;
+        ggml_build_forward_expand(g, roots[k]);
+    }
+}
+
 struct ggml_tensor * llama_build_lora_finetune_graphs(
         struct my_llama_model * model,
         struct my_llama_lora  * lora,
@@ -777,6 +808,10 @@ struct ggml_tensor * llama_build_lora_finetune_graphs(
         struct ggml_tensor  * * logits,
         struct ggml_tensor    * tokens_input,
         struct ggml_tensor    * targets,
+        enum ggml_eval_order  * node_orders,
+        enum ggml_eval_order    graph_order,
+        bool                    reverse_roots,
+        int                   * n_node_orders,
         const  int              n_tokens,
         const  int              n_batch,
         const  bool             enable_flash_attn,
@@ -942,12 +977,44 @@ struct ggml_tensor * llama_build_lora_finetune_graphs(
 
     ggml_build_forward_expand(gf, t36);
 
+    // apply tensor orders for gf
+    n_node_orders[0] = 0;
+    for (int i=0; i<gf->n_nodes; ++i) {
+        struct ggml_tensor * n = gf->nodes[i];
+        int n_src = 0;
+        for (int k = 0; k<GGML_MAX_SRC; ++k) {
+            if (n->src[k]) {
+                ++n_src;
+            }
+        }
+        if (n_src < 2) continue;        
+        n->eval_order = node_orders[n_node_orders[0]++];
+    }
+    // reorder gf
+    reorder_graph(gf, graph_order, reverse_roots);
+
     if (enable_checkpointing) {
         ggml_build_backward_gradient_checkpointing(ctx, gf, gb, gb_tmp, checkpoints.data(), (int) checkpoints.size());
     } else {
         *gb = *gf;
         ggml_build_backward_expand(ctx, gf, gb, true);
     }
+
+    // apply tensor orders for gb
+    for (int i=gf->n_nodes; i<gb->n_nodes; ++i) {
+        struct ggml_tensor * n = gb->nodes[i];
+        int n_src = 0;
+        for (int k = 0; k<GGML_MAX_SRC; ++k) {
+            if (n->src[k]) {
+                ++n_src;
+            }
+        }
+        if (n_src < 2) continue;        
+        n->eval_order = node_orders[n_node_orders[0]++];
+    }
+    // reorder gb
+    reorder_graph(gb, graph_order, reverse_roots);
+
 
     GGML_ASSERT(alloc != NULL);
 
@@ -2508,6 +2575,319 @@ int64_t get_parameter_count(struct my_llama_lora* lora) {
     return nx;
 }
 
+size_t measure_compute_size(
+        struct ggml_init_params * ctx_compute_params,
+        struct train_params * params,
+        struct my_llama_model * model,
+        struct my_llama_lora * lora,
+        struct ggml_tensor * tokens_input,
+        struct ggml_tensor * target_probs,
+        enum ggml_eval_order * node_orders,
+        enum ggml_eval_order   graph_order,
+        bool                   reverse_roots,
+        int                  * out_n_node_orders) {
+    const int n_tokens = model->hparams.n_ctx;
+    const int n_batch  = params->n_batch;
+
+    struct ggml_context * ctx_compute = ggml_init(* ctx_compute_params);
+    ggml_allocr * alloc = ggml_allocr_new_measure(tensor_alignment);
+    struct ggml_cgraph * gf = ggml_new_graph(ctx_compute);
+    gf->order = GGML_EVAL_ORDER_LEFT_TO_RIGHT;
+    struct ggml_cgraph * gb = ggml_new_graph(ctx_compute);
+    struct ggml_cgraph * gb_tmp = params->use_checkpointing
+        ? ggml_new_graph(ctx_compute)
+        : NULL;
+    struct ggml_tensor * loss   = NULL;
+    struct ggml_tensor * logits = NULL;
+
+    loss = llama_build_lora_finetune_graphs(
+        model, lora, alloc, ctx_compute,
+        gf, gb, gb_tmp,
+        &logits, tokens_input, target_probs,
+        node_orders, graph_order, reverse_roots,
+        out_n_node_orders,
+        n_tokens, n_batch,
+        params->use_flash,
+        params->use_checkpointing
+    );
+    GGML_ASSERT(out_n_node_orders[0] <= gb->n_nodes);
+    const size_t max_compute_size = ggml_allocr_max_size(alloc) + tensor_alignment;
+    ggml_allocr_free(alloc);
+    ggml_free(ctx_compute);
+    return max_compute_size;
+}
+
+size_t optimize_node_orders_measure_compute_size(
+        struct ggml_init_params * ctx_compute_params,
+        struct train_params * params,
+        struct my_llama_model * model,
+        struct my_llama_lora * lora,
+        struct ggml_tensor * tokens_input,
+        struct ggml_tensor * target_probs,
+        enum ggml_eval_order * out_node_orders,
+        enum ggml_eval_order   graph_order,
+        bool                   reverse_roots,
+        int                    n_iterations,
+        int                    n_population,
+        int                    max_no_improvement,
+        float                  f_elite,
+        float                  f_mate,
+        float                  f_random,
+        float                  p_mutate) {
+
+    for (int i = 0; i<GGML_MAX_NODES; ++i) {
+        out_node_orders[i] = GGML_EVAL_ORDER_ANY;
+    }
+    int n_node_orders;
+    const size_t max_compute_size = measure_compute_size(
+        ctx_compute_params,
+        params,
+        model,
+        lora,
+        tokens_input,
+        target_probs,
+        out_node_orders,
+        graph_order,
+        reverse_roots,
+        &n_node_orders);
+
+    // genetic algorithm
+    std::vector<enum ggml_eval_order> possible_orders;
+    if ((graph_order == GGML_EVAL_ORDER_ANY) || (graph_order == GGML_EVAL_ORDER_LEFT_TO_RIGHT)) {
+        possible_orders.push_back(GGML_EVAL_ORDER_ANY);
+        possible_orders.push_back(GGML_EVAL_ORDER_RIGHT_TO_LEFT);
+    } else {
+        possible_orders.push_back(GGML_EVAL_ORDER_ANY);
+        possible_orders.push_back(GGML_EVAL_ORDER_LEFT_TO_RIGHT);
+    }
+    auto get_rand_order = [&possible_orders]() -> enum ggml_eval_order {
+        enum ggml_eval_order res = possible_orders[
+            std::min(
+                (unsigned) (frand() * possible_orders.size()),
+                (unsigned) possible_orders.size() - 1u)];
+        GGML_ASSERT(res != GGML_EVAL_ORDER_COUNT);
+        return res;
+    };
+    GGML_ASSERT(f_elite + f_random <= 1.0f);
+    int n_elite  = (int)(n_population * f_elite);
+    int n_mate   = (int)(n_population * f_mate);
+    int n_random = (int)(n_population * f_random);
+
+    std::vector<enum ggml_eval_order> genotypes;
+    std::vector<enum ggml_eval_order> genotypes_next;
+    std::vector<size_t> measurements;
+    std::vector<size_t> ranked;
+
+    auto compare = [&measurements](size_t a, size_t b){
+        return (measurements[a] == measurements[b])
+                    ? (a < b)
+                    : measurements[a] < measurements[b];
+    };
+
+    auto mate = [n_node_orders, p_mutate, &get_rand_order](enum ggml_eval_order * child, enum ggml_eval_order * a, enum ggml_eval_order * b){
+        const float p_a = p_mutate + (1.0f - p_mutate) * 0.5f;
+        for (int i=0; i<n_node_orders; ++i) {
+            float p = frand();
+            if (p<p_mutate) {
+                child[i] = get_rand_order();
+            } else if (p<p_a) {
+                child[i] = a[i];
+            } else {
+                child[i] = b[i];
+            }
+        }
+    };
+
+    // initialize population of genotypes
+    genotypes.resize(n_node_orders * n_population, GGML_EVAL_ORDER_ANY);
+    genotypes_next.resize(n_node_orders * n_population, GGML_EVAL_ORDER_ANY);
+    measurements.resize(n_population, SIZE_MAX);
+    ranked.resize(n_population, 0);
+    for (int i=1; i<n_population; ++i) {
+        for (int k=0; k<n_node_orders; ++k) {
+            genotypes[n_node_orders*i + k] = get_rand_order();
+        }
+    }
+    // genetic algorithm
+    size_t last_best_measurement = SIZE_MAX;
+    int no_improvement = 0;
+    for (int it=0; it<n_iterations; ++it) {
+        // measure genotypes
+        for (int i=0; i<n_population; ++i) {
+            int n_node_orders_ = 0;
+            measurements[i] = measure_compute_size(
+                ctx_compute_params,
+                params,
+                model,
+                lora,
+                tokens_input,
+                target_probs,
+                &genotypes[n_node_orders*i],
+                graph_order,
+                reverse_roots,
+                &n_node_orders_);
+            GGML_ASSERT(n_node_orders_ == n_node_orders);
+            ranked[i] = i;
+        }
+        if (it == n_iterations-1) break;
+        std::partial_sort(
+            ranked.begin(),
+            ranked.begin() + std::max(n_elite, n_mate), 
+            ranked.end(),
+            compare);
+
+        int best_genotype = ranked[0];
+        size_t best_measurement = measurements[best_genotype];
+        printf("%s: it=%d best_genotype = %d best_measurement = %zu bytes (%.1f MB)\n",
+            __func__, it, best_genotype, best_measurement, (float) best_measurement / (1024.0f*1024.0f));
+        GGML_ASSERT(best_measurement <= last_best_measurement);
+        if (best_measurement < last_best_measurement) {
+            no_improvement = 0;
+        } else {
+            ++no_improvement;
+        }
+        last_best_measurement = best_measurement;
+        if (no_improvement >= max_no_improvement) {
+            break;
+        }
+        // take over elite into next generation
+        for (int i=0; i<n_elite; ++i) {
+            int elite = ranked[i];
+            for (int k=0; k<n_node_orders; ++k) {
+                genotypes_next[i*n_node_orders + k] = genotypes[elite*n_node_orders + k];
+            }
+        }
+        // mate best individuals
+        for (int i=n_elite; i<n_population-n_random; ++i) {
+            int a = std::min((int)(frand()*n_elite), n_elite-1);
+            int b = std::min((int)(frand()*n_mate), n_mate-1);
+            a = ranked[a];
+            b = ranked[b];
+            mate(
+                &genotypes_next[i*n_node_orders],
+                &genotypes[a*n_node_orders],
+                &genotypes[b*n_node_orders]);
+        }
+        // create new random individuals
+        for (int i=n_population-n_random; i<n_population; ++i) {
+            for (int k=0; k<n_node_orders; ++k) {
+                genotypes[n_node_orders*i + k] = get_rand_order();
+            }
+        }
+        memcpy(genotypes.data(), genotypes_next.data(), n_population*n_node_orders*sizeof(enum ggml_eval_order));
+    }
+    int best_genotype = (int)(std::min_element(measurements.begin(), measurements.end()) - measurements.begin());
+    for (int k=0; k<n_node_orders; ++k) {
+        out_node_orders[k] = genotypes[n_node_orders*best_genotype + k];
+    }
+    printf("%s: best_genotype = %d\n", __func__, best_genotype);
+    return measurements[best_genotype];
+}
+size_t optimize_measure_compute_size(
+        struct ggml_init_params * ctx_compute_params,
+        struct train_params * params,
+        struct my_llama_model * model,
+        struct my_llama_lora * lora,
+        struct ggml_tensor * tokens_input,
+        struct ggml_tensor * target_probs,
+        enum ggml_eval_order * out_node_orders,
+        enum ggml_eval_order * out_graph_order,
+        uint32_t             * out_reverse_roots) {
+
+    size_t best_compute_size = SIZE_MAX;
+    * out_graph_order = GGML_EVAL_ORDER_COUNT;
+    * out_reverse_roots = (uint32_t) false;
+
+    std::vector<enum ggml_eval_order> node_orders;
+    node_orders.resize(GGML_MAX_NODES, GGML_EVAL_ORDER_ANY);
+
+    int   n_iterations = 100;
+    int   n_population = 50;
+    int   max_no_improvement = 20;
+    float f_elite      = 0.1f;
+    float f_mate       = 0.5f;
+    float f_random     = 0.2f;
+    float p_mutate     = 0.2f;
+    
+    // find best reverse_roots & order
+    for (unsigned u_reverse_roots = 0; u_reverse_roots < 2; ++u_reverse_roots) {
+        const bool reverse_roots = (bool) u_reverse_roots;
+        for (unsigned order = 1; order < (unsigned) GGML_EVAL_ORDER_COUNT; ++order) {
+            const enum ggml_eval_order graph_order = (enum ggml_eval_order) order;
+            const int64_t t0 = ggml_time_ms();
+            const int n_iterations = 1;
+            const int n_population = 1;
+            const size_t max_compute_size = optimize_node_orders_measure_compute_size(
+                ctx_compute_params,
+                params,
+                model,
+                lora,
+                tokens_input,
+                target_probs,
+                node_orders.data(),
+                graph_order,
+                reverse_roots,
+                n_iterations,
+                n_population,
+                max_no_improvement,
+                f_elite,
+                f_mate,
+                f_random,
+                p_mutate);
+            const int64_t t1 = ggml_time_ms();
+
+            if (max_compute_size <= best_compute_size) {
+                best_compute_size = max_compute_size;
+                * out_graph_order   = graph_order;
+                * out_reverse_roots = u_reverse_roots;
+                for (int i = 0; i<GGML_MAX_NODES; ++i) {
+                    out_node_orders[i] = node_orders[i];
+                }
+            }
+
+            printf("%s: measure size time: ", __func__);
+            print_duration((double) (t1 - t0));
+            printf("\n");
+
+            printf("%s: max_compute_size = %zu bytes (%.1f MB)\n", __func__, max_compute_size, (float) max_compute_size / (1024.0f*1024.0f));
+            printf("%s: evaluation order = %s\n", __func__,
+                (graph_order == GGML_EVAL_ORDER_ANY)           ? "ANY" :
+                (graph_order == GGML_EVAL_ORDER_LEFT_TO_RIGHT) ? "LEFT_TO_RIGHT" :
+                (graph_order == GGML_EVAL_ORDER_RIGHT_TO_LEFT) ? "RIGHT_TO_LEFT" :
+                "invalid");
+            printf("%s: reverse roots = %s\n", __func__, reverse_roots ? "true" : "false");
+            printf("\n");
+        }
+    }
+    // find best node orders given best reverse_roots & order
+    if (n_iterations > 1) {
+        const size_t max_compute_size = optimize_node_orders_measure_compute_size(
+            ctx_compute_params,
+            params,
+            model,
+            lora,
+            tokens_input,
+            target_probs,
+            node_orders.data(),
+            * out_graph_order,
+            (bool) * out_reverse_roots,
+            n_iterations,
+            n_population,
+            max_no_improvement,
+            f_elite,
+            f_mate,
+            f_random,
+            p_mutate);
+        if (max_compute_size <= best_compute_size) {
+            best_compute_size = max_compute_size;
+            for (int i = 0; i<GGML_MAX_NODES; ++i) {
+                out_node_orders[i] = node_orders[i];
+            }
+        }
+    }
+    return best_compute_size;
+}
+
 int main(int argc, char ** argv) {
     struct train_params params = get_default_train_params();
 
@@ -2731,61 +3111,94 @@ int main(int argc, char ** argv) {
     struct ggml_cgraph * gb_tmp = NULL;
 
     // measure required memory for compute tensors
-    size_t best_compute_size = SIZE_MAX;
-    enum ggml_cgraph_eval_order best_order = GGML_CGRAPH_EVAL_ORDER_COUNT;
-    // find best evaluation order
-    for (unsigned order = 0; order < (unsigned) GGML_CGRAPH_EVAL_ORDER_COUNT; ++order) {
-        ctx_compute = ggml_init(ctx_compute_params);
-        alloc = ggml_allocr_new_measure(tensor_alignment);
-        gf = ggml_new_graph(ctx_compute);
-        gf->order = (enum ggml_cgraph_eval_order) order;
-        gb = ggml_new_graph(ctx_compute);
-        gb_tmp = params.use_checkpointing
-            ? ggml_new_graph(ctx_compute)
-            : NULL;
-        loss = llama_build_lora_finetune_graphs(
-            &model, &lora, alloc, ctx_compute,
-            gf, gb, gb_tmp,
-            &logits, tokens_input, target_probs,
-            n_tokens, n_batch,
-            params.use_flash,
-            params.use_checkpointing
-        );
-        size_t max_compute_size = ggml_allocr_max_size(alloc) + tensor_alignment;
-        if (max_compute_size < best_compute_size) {
-            best_compute_size = max_compute_size;
-            best_order = gf->order;
-        }
-        ggml_allocr_free(alloc);
-        ggml_free(ctx_compute);
-    }
-    size_t max_compute_size = best_compute_size;
+    // size_t best_compute_size = SIZE_MAX;
+    // enum ggml_eval_order best_order = GGML_EVAL_ORDER_COUNT;
+    // // find best evaluation order
+    // for (unsigned order = 0; order < (unsigned) GGML_EVAL_ORDER_COUNT; ++order) {
+    //     int64_t t0 = ggml_time_ms();
+    //     size_t max_compute_size = measure_compute_size(
+    //         &ctx_compute_params,
+    //         &params,
+    //         &model,
+    //         &lora,
+    //         tokens_input,
+    //         target_probs,
+    //         (enum ggml_eval_order) order
+    //     );
+    //     int64_t t1 = ggml_time_ms();
+
+    //     if (max_compute_size <= best_compute_size) {
+    //         best_compute_size = max_compute_size;
+    //         best_order = (enum ggml_eval_order) order;
+    //     }
+
+    //     printf("%s: measure size time: ", __func__);
+    //     print_duration((double) (t1 - t0));
+    //     printf("\n");
+    // }
+    // size_t max_compute_size = best_compute_size;
+    std::vector<enum ggml_eval_order> node_orders;
+    node_orders.resize(GGML_MAX_NODES);
+    enum ggml_eval_order graph_order = GGML_EVAL_ORDER_COUNT;
+    uint32_t u_reverse_roots = 0;
+    size_t max_compute_size = optimize_measure_compute_size(
+        &ctx_compute_params,
+        &params,
+        &model,
+        &lora,
+        tokens_input,
+        target_probs,
+        node_orders.data(),
+        &graph_order,
+        &u_reverse_roots
+    );
+    bool reverse_roots = (bool) u_reverse_roots;
     printf("%s: max_compute_size = %zu bytes (%.1f MB)\n", __func__, max_compute_size, (float) max_compute_size / (1024.0f*1024.0f));
     printf("%s: evaluation order = %s\n", __func__,
-        (best_order == GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT) ? "LEFT_TO_RIGHT" :
-        (best_order == GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT) ? "RIGHT_TO_LEFT" :
+        (graph_order == GGML_EVAL_ORDER_ANY)           ? "ANY" :
+        (graph_order == GGML_EVAL_ORDER_LEFT_TO_RIGHT) ? "LEFT_TO_RIGHT" :
+        (graph_order == GGML_EVAL_ORDER_RIGHT_TO_LEFT) ? "RIGHT_TO_LEFT" :
         "invalid");
+    printf("%s: reverse roots = %s\n", __func__, reverse_roots ? "true" : "false");
 
     // allocate compute tensors
     mem_compute_data.resize(max_compute_size);
     ctx_compute = ggml_init(ctx_compute_params);
     alloc = ggml_allocr_new(mem_compute_data.data(), mem_compute_data.size(), tensor_alignment);
     gf = ggml_new_graph(ctx_compute);
-    gf->order = best_order;
     gb = ggml_new_graph(ctx_compute);
     gb_tmp = params.use_checkpointing
         ? ggml_new_graph(ctx_compute)
         : NULL;
+    int n_node_orders;
     loss = llama_build_lora_finetune_graphs(
         &model, &lora, alloc, ctx_compute,
         gf, gb, gb_tmp,
         &logits, tokens_input, target_probs,
+        node_orders.data(),
+        graph_order,
+        reverse_roots,
+        &n_node_orders,
         n_tokens, n_batch,
         params.use_flash,
         params.use_checkpointing
     );
+    GGML_ASSERT(n_node_orders <= node_orders.size());
     ggml_allocr_free(alloc);
 
+    for (int i = 0; i<gb->n_nodes; ++i) {
+        struct ggml_tensor * n = gb->nodes[i];
+        int n_src = 0;
+        for (int k = 0; k<GGML_MAX_SRC; ++k) {
+            if (n->src[k]) {
+                ++n_src;
+            }
+        }
+        if (n_src < 2) continue;
+        if (node_orders[i] != GGML_EVAL_ORDER_ANY) {
+            printf("%s: node %d op=%s name='%s'\n", __func__, i, ggml_op_name(n->op), ggml_get_name(n));
+        }
+    }
     // tokenize data
     std::vector<llama_token> train_tokens;
     printf("%s: tokenize training data\n", __func__);
