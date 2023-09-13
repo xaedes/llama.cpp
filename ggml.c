@@ -124,7 +124,7 @@ typedef void * thread_ret_t;
 #endif
 #endif
 
-/*#define GGML_PERF*/
+#define GGML_PERF
 #define GGML_DEBUG 0
 #define GGML_GELU_FP16
 #define GGML_GELU_QUICK_FP16
@@ -18942,25 +18942,25 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
 
         perf_total_per_op_us[node->op] += MAX(1, node->perf_time_us);
 
-        GGML_PRINT(" - %3d: [ %5" PRId64 ", %5" PRId64 ", %5" PRId64 "] %16s %s (%3d) cpu = %7.3f / %7.3f ms, wall = %7.3f / %7.3f ms\n",
-                i,
-                node->ne[0], node->ne[1], node->ne[2],
-                ggml_op_name(node->op), node->is_param ? "x" : node->grad ? "g" : " ", node->perf_runs,
-                (double) node->perf_cycles  / (double) ggml_cycles_per_ms(),
-                (double) node->perf_cycles  / (double) ggml_cycles_per_ms() / (double) node->perf_runs,
-                (double) node->perf_time_us / 1000.0,
-                (double) node->perf_time_us / 1000.0 / node->perf_runs);
+        // GGML_PRINT(" - %3d: [ %5" PRId64 ", %5" PRId64 ", %5" PRId64 "] %16s %s (%3d) cpu = %7.3f / %7.3f ms, wall = %7.3f / %7.3f ms\n",
+        //         i,
+        //         node->ne[0], node->ne[1], node->ne[2],
+        //         ggml_op_name(node->op), node->is_param ? "x" : node->grad ? "g" : " ", node->perf_runs,
+        //         (double) node->perf_cycles  / (double) ggml_cycles_per_ms(),
+        //         (double) node->perf_cycles  / (double) ggml_cycles_per_ms() / (double) node->perf_runs,
+        //         (double) node->perf_time_us / 1000.0,
+        //         (double) node->perf_time_us / 1000.0 / node->perf_runs);
     }
 
-    GGML_PRINT("n_leafs = %d\n", cgraph->n_leafs);
-    for (int i = 0; i < cgraph->n_leafs; i++) {
-        struct ggml_tensor * node = cgraph->leafs[i];
+    // GGML_PRINT("n_leafs = %d\n", cgraph->n_leafs);
+    // for (int i = 0; i < cgraph->n_leafs; i++) {
+    //     struct ggml_tensor * node = cgraph->leafs[i];
 
-        GGML_PRINT(" - %3d: [ %5" PRId64 ", %5" PRId64 "] %8s\n",
-                i,
-                node->ne[0], node->ne[1],
-                ggml_op_name(node->op));
-    }
+    //     GGML_PRINT(" - %3d: [ %5" PRId64 ", %5" PRId64 "] %8s\n",
+    //             i,
+    //             node->ne[0], node->ne[1],
+    //             ggml_op_name(node->op));
+    // }
 
     for (int i = 0; i < GGML_OP_COUNT; i++) {
         if (perf_total_per_op_us[i] == 0) {

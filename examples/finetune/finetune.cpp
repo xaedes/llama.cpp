@@ -2947,7 +2947,7 @@ int main(int argc, char ** argv) {
     if (params.use_adam) {
         opt->params = ggml_opt_default_params(GGML_OPT_ADAM);
         opt->params.print_forward_graph     = false;
-        opt->params.print_backward_graph    = false;
+        opt->params.print_backward_graph    = true;
         opt->params.n_threads               = params.n_threads;
         opt->params.past                    = params.opt_past;
         opt->params.delta                   = params.opt_delta;
