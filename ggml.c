@@ -19340,6 +19340,10 @@ static enum ggml_opt_result ggml_opt_adam(
             }
         }
 
+        if (t == params.adam.n_iter-1) {
+            break;
+        }
+
         fx = 0;
         ggml_set_zero(opt->adam.g);
         for (int accum_step = 0; accum_step < n_accum; ++accum_step) {
