@@ -17854,6 +17854,8 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
                 struct ggml_tensor * node = cgraph->nodes[node_n];
                 const int n_tasks = n_tasks_arr[node_n];
 
+                fprintf(stderr, "%s: %d/%d %s\n", __func__, node_n, cgraph->n_nodes, ggml_op_name(node->op));
+
                 state->shared->perf_node_start_cycles  = ggml_perf_cycles();
                 state->shared->perf_node_start_time_us = ggml_perf_time_us();
 
