@@ -15168,239 +15168,249 @@ static void ggml_compute_forward_flash_attn_back_f32(
     // how often k2 (and v2) is repeated in q2
     int nrep = neq2/nek2;
 
-    for (int ir = ir0; ir < ir1; ++ir) {
-        // q indices
-        const int ik3 = ir/(nek2);
-        const int ik2 = ir - ik3*nek2;
+    // block-tiling attempt
+    const int64_t blck_0 = 1024;
+    const int64_t blck_1 = 512;
 
-        const int iq3 = ik3;
-        const int id3 = ik3;
-        const int iv3 = ik3;
-        const int iv2 = ik2;
+    for (int64_t bir = ir0; bir < ir1; bir += blck_1) {
+        const int64_t bir1 = MIN(bir + blck_1, ir1);
+        for (int64_t biq1 = 0; biq1 < neq1; biq1 += blck_0) {
+            const int64_t bneq1 = MIN(biq1 + blck_0, neq1);
+            for (int ir = bir; ir < bir1; ++ir) {
+                // q indices
+                const int ik3 = ir/(nek2);
+                const int ik2 = ir - ik3*nek2;
 
-        for (int irep = 0; irep < nrep; ++irep) {
-            const int iq2 = ik2 + irep*nek2;
-            const int id2 = iq2;
+                const int iq3 = ik3;
+                const int id3 = ik3;
+                const int iv3 = ik3;
+                const int iv2 = ik2;
 
-            // (ik2 + irep*nek2) % nek2 == ik2
-            for (int iq1 = 0; iq1 < neq1; ++iq1) {
-                const int id1 = iq1;
+                for (int irep = 0; irep < nrep; ++irep) {
+                    // (ik2 + irep*nek2) % nek2 == ik2
+                    const int iq2 = ik2 + irep*nek2;
+                    const int id2 = iq2;
 
-                // not sure about CACHE_LINE_SIZE_F32..
-                // - maybe it must not be multiplied by 2 and excluded from .. in SM 1*(..) offset?
-                float * S  = (float *) params->wdata + ith*2*(mxDM + CACHE_LINE_SIZE_F32) + 0*(mxDM+CACHE_LINE_SIZE_F32);
-                float * SM = (float *) params->wdata + ith*2*(mxDM + CACHE_LINE_SIZE_F32) + 1*(mxDM+CACHE_LINE_SIZE_F32);
+                    for (int iq1 = biq1; iq1 < bneq1; ++iq1) {
+                        const int id1 = iq1;
 
-                for (int i = M; i < Mup; ++i) {
-                    S[i] = -INFINITY;
-                }
+                        // not sure about CACHE_LINE_SIZE_F32..
+                        // - maybe it must not be multiplied by 2 and excluded from .. in SM 1*(..) offset?
+                        float * S  = (float *) params->wdata + ith*2*(mxDM + CACHE_LINE_SIZE_F32) + 0*(mxDM+CACHE_LINE_SIZE_F32);
+                        float * SM = (float *) params->wdata + ith*2*(mxDM + CACHE_LINE_SIZE_F32) + 1*(mxDM+CACHE_LINE_SIZE_F32);
 
-                const int64_t masked_begin = masked ? (P + iq1 + 1) : M;
-                for (int64_t ic = 0; ic < masked_begin; ++ic) {
-                    // k indices
-                    const int ik1 = ic;
+                        for (int i = M; i < Mup; ++i) {
+                            S[i] = -INFINITY;
+                        }
 
-                    // S indices
-                    const int i1 = ik1;
+                        const int64_t masked_begin = masked ? (P + iq1 + 1) : M;
+                        for (int64_t ic = 0; ic < masked_begin; ++ic) {
+                            // k indices
+                            const int ik1 = ic;
 
-                    ggml_vec_dot_f32(neq0,
-                            S + i1,
-                            (float *) ((char *) k->data + (ik1*nbk1 + ik2*nbk2 + ik3*nbk3)),
-                            (float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3)));
-                }
+                            // S indices
+                            const int i1 = ik1;
 
-                // scale
-                ggml_vec_scale_f32(masked_begin, S, scale);
+                            ggml_vec_dot_f32(neq0,
+                                    S + i1,
+                                    (float *) ((char *) k->data + (ik1*nbk1 + ik2*nbk2 + ik3*nbk3)),
+                                    (float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3)));
+                        }
 
-                for (int64_t i = masked_begin; i < M; i++) {
-                    S[i] = -INFINITY;
-                }
+                        // scale
+                        ggml_vec_scale_f32(masked_begin, S, scale);
 
-                // softmax
-                // exclude known -INF S[..] values from max and loop
-                // dont forget to set their SM values to zero
-                {
-                    float max = -INFINITY;
-                    ggml_vec_max_f32(masked_begin, &max, S);
+                        for (int64_t i = masked_begin; i < M; i++) {
+                            S[i] = -INFINITY;
+                        }
 
-                    ggml_float sum = 0.0;
-                    {
-#ifdef GGML_SOFT_MAX_ACCELERATE
-                        max = -max;
-                        vDSP_vsadd(SM, 1, &max, SM, 1, Mup);
-                        vvexpf(SM, SM, &Mup);
-                        ggml_vec_sum_f32(Mup, &sum, SM);
-#else
-                        uint16_t   scvt[GGML_SOFT_MAX_UNROLL]; UNUSED(scvt);
-                        ggml_float sump[GGML_SOFT_MAX_UNROLL] = { 0.0 };
+                        // softmax
+                        // exclude known -INF S[..] values from max and loop
+                        // dont forget to set their SM values to zero
+                        {
+                            float max = -INFINITY;
+                            ggml_vec_max_f32(masked_begin, &max, S);
 
-                        for (int i = 0; i < Mup; i += GGML_SOFT_MAX_UNROLL) {
-                            if (i >= masked_begin) {
-                                break;
-                            }
-                            float * SR =  S + i;
-                            float * SW = SM + i;
+                            ggml_float sum = 0.0;
+                            {
+        #ifdef GGML_SOFT_MAX_ACCELERATE
+                                max = -max;
+                                vDSP_vsadd(SM, 1, &max, SM, 1, Mup);
+                                vvexpf(SM, SM, &Mup);
+                                ggml_vec_sum_f32(Mup, &sum, SM);
+        #else
+                                uint16_t   scvt[GGML_SOFT_MAX_UNROLL]; UNUSED(scvt);
+                                ggml_float sump[GGML_SOFT_MAX_UNROLL] = { 0.0 };
 
-                            for (int j = 0; j < GGML_SOFT_MAX_UNROLL; ++j) {
-                                if (i + j >= masked_begin) {
-                                    break;
-                                } else if (SR[j] == -INFINITY) {
-                                    SW[j] = 0.0f;
-                                } else {
-#ifndef GGML_FLASH_ATTN_EXP_FP16
-                                    const float val = expf(SR[j] - max);
-#else
-                                    ggml_fp16_t s = GGML_FP32_TO_FP16(SR[j] - max);
-                                    memcpy(&scvt[j], &s, sizeof(uint16_t));
-                                    const float val = GGML_FP16_TO_FP32(table_exp_f16[scvt[j]]);
-#endif
-                                    sump[j] += (ggml_float)val;
-                                    SW[j] = val;
+                                for (int i = 0; i < Mup; i += GGML_SOFT_MAX_UNROLL) {
+                                    if (i >= masked_begin) {
+                                        break;
+                                    }
+                                    float * SR =  S + i;
+                                    float * SW = SM + i;
+
+                                    for (int j = 0; j < GGML_SOFT_MAX_UNROLL; ++j) {
+                                        if (i + j >= masked_begin) {
+                                            break;
+                                        } else if (SR[j] == -INFINITY) {
+                                            SW[j] = 0.0f;
+                                        } else {
+        #ifndef GGML_FLASH_ATTN_EXP_FP16
+                                            const float val = expf(SR[j] - max);
+        #else
+                                            ggml_fp16_t s = GGML_FP32_TO_FP16(SR[j] - max);
+                                            memcpy(&scvt[j], &s, sizeof(uint16_t));
+                                            const float val = GGML_FP16_TO_FP32(table_exp_f16[scvt[j]]);
+        #endif
+                                            sump[j] += (ggml_float)val;
+                                            SW[j] = val;
+                                        }
+                                    }
                                 }
+
+                                for (int i = 0; i < GGML_SOFT_MAX_UNROLL; i++) {
+                                    sum += sump[i];
+                                }
+        #endif
                             }
+
+                            assert(sum > 0.0);
+
+                            sum = 1.0/sum;
+                            ggml_vec_scale_f32(masked_begin, SM, sum);
+
                         }
 
-                        for (int i = 0; i < GGML_SOFT_MAX_UNROLL; i++) {
-                            sum += sump[i];
+                        // step-by-step explanation
+                        {
+                            // forward-process                    shape      grads from backward process
+                            // parallel_for ik2,ik3:
+                            //  for irep:
+                            //   iq2 = ik2 + irep*nek2
+                            //   k[:D,:M,:,:]                     [D,M,:,:]  grad[k][:D,:M,ik2,ik3]  += grad[kcur]
+                            //   q[:D,:N,:,:]                     [D,N,:,:]  grad[q][:D,iq1,iq2,iq3] += grad[qcur]
+                            //   v[:M,:D,:,:]                     [M,D,:,:]  grad[v][:M,:D,iv2,iv3]  += grad[vcur]
+                            //   for iq1:
+                            //    kcur   = k[:D,:M,ik2,ik3]       [D,M,1,1]  grad[kcur] = grad[S1].T @ qcur
+                            //    qcur   = q[:D,iq1,iq2,iq3]      [D,1,1,1]  grad[qcur] = grad[S1]   @ kcur
+                            //    vcur   = v[:M,:D,iv2,iv3]       [M,D,1,1]  grad[vcur] = grad[S5].T @ S4
+                            //    S0     = -Inf                   [D,1,1,1]
+                            //   ~S1[i]  = dot(kcur[:D,i], qcur)
+                            //    S1     = qcur @ kcur.T          [M,1,1,1]  grad[S1]   = grad[S2] * scale
+                            //    S2     = S1 * scale             [M,1,1,1]  grad[S2]   = diag_mask_zero(grad[S3], P)
+                            //    S3     = diag_mask_inf(S2, P)   [M,1,1,1]  grad[S3]   = S4 * (grad[S4] - dot(S4, grad[S4]))
+                            //    S4     = softmax(S3)            [M,1,1,1]  grad[S4]   = grad[S5] @ vcur
+                            //   ~S5[i]  = dot(vcur[:,i], S4)
+                            //    S5     = S4 @ vcur.T            [D,1,1,1]  grad[S5]   = d[:D,id1,id2,id3]
+                            //   ~dst[i,iq1,iq2,iq3]  = S5[i]              ^
+                            //    dst[:D,iq1,iq2,iq3] = S5                 | grad[dst[:D,iq1,iq2,iq3]] = d[:D,id1,id2,id3]
+                            // dst                               backward-/ grad[dst]                 = d
+                            //
+                            // output gradients with their dependencies:
+                            //
+                            // grad[kcur] = grad[S1].T @ qcur
+                            // grad[S1]   = diag_mask_zero(grad[S3], P) * scale
+                            // grad[S3]   = S4 * (grad[S4] - dot(S4, grad[S4]))
+                            // grad[S4]   = grad[S5] @ vcur
+                            // grad[S4]   = d[:D,id1,id2,id3] @ vcur
+                            // grad[qcur] = grad[S1]   @ kcur
+                            // grad[vcur] = grad[S5].T @ S4
+                            // grad[vcur] = d[:D,id1,id2,id3].T @ S4
+                            //
+                            // in post-order:
+                            //
+                            // S1         = qcur @ kcur.T
+                            // S2         = S1 * scale
+                            // S3         = diag_mask_inf(S2, P)
+                            // S4         = softmax(S3)
+                            // grad[S4]   = d[:D,id1,id2,id3] @ vcur
+                            // grad[S3]   = S4 * (grad[S4] - dot(S4, grad[S4]))
+                            // grad[S1]   = diag_mask_zero(grad[S3], P) * scale
+                            // grad[qcur] = grad[S1]   @ kcur
+                            // grad[kcur] = grad[S1].T @ qcur
+                            // grad[vcur] = d[:D,id1,id2,id3].T @ S4
+                            //
+                            // using less variables (SM=S4):
+                            //
+                            // S             = diag_mask_inf(qcur @ kcur.T * scale, P)
+                            // SM            = softmax(S)
+                            // S             = d[:D,iq1,iq2,iq3] @ vcur
+                            // dot_SM_gradSM = dot(SM, S)
+                            // S             = SM * (S - dot(SM, S))
+                            // S             = diag_mask_zero(S, P) * scale
+                            //
+                            // grad[q][:D,iq1,iq2,iq3] += S   @ kcur
+                            // grad[k][:D,:M,ik2,ik3]  += S.T @ qcur
+                            // grad[v][:M,:D,iv2,iv3]  += d[:D,id1,id2,id3].T @ SM
                         }
-#endif
+
+                        // S = gradSM = d[:D,id1,id2,id3] @ vcur[:,:,iv2,iv3]
+                        // S = d[:D,id1,id2,id3] @ vcur[:,:,iv2,iv3]
+                        // for ic:
+                        //   S[:M] += vcur[:M,ic,iv2,iv3] * d[ic,id1,id2,id3]
+                        // exclude known future zero S[..] values from operation
+                        ggml_vec_set_f32(masked_begin, S, 0);
+                        for (int64_t ic = 0; ic < D; ++ic) {
+                            ggml_vec_mad_f32(masked_begin,
+                                    S,
+                                     (float *) ((char *) v->data + (          ic*nbv1  + iv2*nbv2 + iv3*nbv3)),
+                                    *(float *) ((char *) d->data + (ic*nbd0 + id1*nbd1 + id2*nbd2 + id3*nbd3)));
+                        }
+
+                        // S = SM * (S - dot(SM, S))
+                        float dot_SM_gradSM = 0;
+                        ggml_vec_dot_f32 (masked_begin, &dot_SM_gradSM, SM, S);
+                        ggml_vec_acc1_f32(M, S, -dot_SM_gradSM);
+                        ggml_vec_mul_f32 (masked_begin, S, S, SM);
+
+                        // S = diag_mask_zero(S, P) * scale
+                        // already done by above ggml_vec_set_f32
+
+                        // exclude known zero S[..] values from operation
+                        ggml_vec_scale_f32(masked_begin, S, scale);
+
+                        // S    shape [M,1]
+                        // SM   shape [M,1]
+                        // kcur shape [D,M]
+                        // qcur shape [D,1]
+                        // vcur shape [M,D]
+
+                        // grad[q][:D,iq1,iq2,iq3] += S @ kcur
+                        // grad[q][:D,iq1,iq2,iq3] += shape[M,1] @ shape[D,M]
+                        // for ic:
+                        //  grad[q][:D,iq1,iq2,iq3] += S[ic] * kcur[:D,ic,ik2,ik3]
+                        // exclude known zero S[..] values from loop
+                        for (int64_t ic = 0; ic < masked_begin; ++ic) {
+                            ggml_vec_mad_f32(D,
+                                    (float *) ((char *) grad_q  + (iq1*nbgq1 + iq2*nbgq2  + iq3*nbgq3)),
+                                    (float *) ((char *) k->data + (ic*nbk1   + ik2*nbk2   + ik3*nbk3)),
+                                    S[ic]);
+                        }
+
+                        // grad[k][:D,:M,iq2,iq3] += S.T @ qcur
+                        // for ic:
+                        //  grad[k][:D,ic,iq2,iq3] += S.T[0,ic] * qcur[:D,0]
+                        //  grad[k][:D,ic,iq2,iq3] += S[ic]     * qcur[:D,0]
+                        // exclude known zero S[..] values from loop
+                        for (int64_t ic = 0; ic < masked_begin; ++ic) {
+                            ggml_vec_mad_f32(D,
+                                    (float *) ((char *) grad_k  + (ic*nbgk1  + ik2*nbgk2  + ik3*nbgk3)),
+                                    (float *) ((char *) q->data + (iq1*nbq1  + iq2*nbq2   + iq3*nbq3)),
+                                    S[ic]);
+                        }
+
+                        // grad[v][:M,:D,iv2,iv3] += d[:D,id1,id2,id3].T       @ SM
+                        // for ic:
+                        //  grad[v][:M,ic,iv2,iv3] += d[:D,id1,id2,id3].T[0,ic] * SM[:M]
+                        //  grad[v][:M,ic,iv2,iv3] += d[ic,id1,id2,id3]         * SM[:M]
+                        // exclude known zero SM[..] values from mad
+                        for (int64_t ic = 0; ic < D; ++ic) {
+                            ggml_vec_mad_f32(masked_begin,
+                                    (float *) ((char *) grad_v   + (          ic*nbgv1 + iv2*nbgv2 + iv3*nbgv3)),
+                                    SM,
+                                    *(float *) ((char *) d->data + (ic*nbd0 + id1*nbd1 + id2*nbd2  + id3*nbd3)));
+                        }
                     }
-
-                    assert(sum > 0.0);
-
-                    sum = 1.0/sum;
-                    ggml_vec_scale_f32(masked_begin, SM, sum);
-
-                }
-
-                // step-by-step explanation
-                {
-                    // forward-process                    shape      grads from backward process
-                    // parallel_for ik2,ik3:
-                    //  for irep:
-                    //   iq2 = ik2 + irep*nek2
-                    //   k[:D,:M,:,:]                     [D,M,:,:]  grad[k][:D,:M,ik2,ik3]  += grad[kcur]
-                    //   q[:D,:N,:,:]                     [D,N,:,:]  grad[q][:D,iq1,iq2,iq3] += grad[qcur]
-                    //   v[:M,:D,:,:]                     [M,D,:,:]  grad[v][:M,:D,iv2,iv3]  += grad[vcur]
-                    //   for iq1:
-                    //    kcur   = k[:D,:M,ik2,ik3]       [D,M,1,1]  grad[kcur] = grad[S1].T @ qcur
-                    //    qcur   = q[:D,iq1,iq2,iq3]      [D,1,1,1]  grad[qcur] = grad[S1]   @ kcur
-                    //    vcur   = v[:M,:D,iv2,iv3]       [M,D,1,1]  grad[vcur] = grad[S5].T @ S4
-                    //    S0     = -Inf                   [D,1,1,1]
-                    //   ~S1[i]  = dot(kcur[:D,i], qcur)
-                    //    S1     = qcur @ kcur.T          [M,1,1,1]  grad[S1]   = grad[S2] * scale
-                    //    S2     = S1 * scale             [M,1,1,1]  grad[S2]   = diag_mask_zero(grad[S3], P)
-                    //    S3     = diag_mask_inf(S2, P)   [M,1,1,1]  grad[S3]   = S4 * (grad[S4] - dot(S4, grad[S4]))
-                    //    S4     = softmax(S3)            [M,1,1,1]  grad[S4]   = grad[S5] @ vcur
-                    //   ~S5[i]  = dot(vcur[:,i], S4)
-                    //    S5     = S4 @ vcur.T            [D,1,1,1]  grad[S5]   = d[:D,id1,id2,id3]
-                    //   ~dst[i,iq1,iq2,iq3]  = S5[i]              ^
-                    //    dst[:D,iq1,iq2,iq3] = S5                 | grad[dst[:D,iq1,iq2,iq3]] = d[:D,id1,id2,id3]
-                    // dst                               backward-/ grad[dst]                 = d
-                    //
-                    // output gradients with their dependencies:
-                    //
-                    // grad[kcur] = grad[S1].T @ qcur
-                    // grad[S1]   = diag_mask_zero(grad[S3], P) * scale
-                    // grad[S3]   = S4 * (grad[S4] - dot(S4, grad[S4]))
-                    // grad[S4]   = grad[S5] @ vcur
-                    // grad[S4]   = d[:D,id1,id2,id3] @ vcur
-                    // grad[qcur] = grad[S1]   @ kcur
-                    // grad[vcur] = grad[S5].T @ S4
-                    // grad[vcur] = d[:D,id1,id2,id3].T @ S4
-                    //
-                    // in post-order:
-                    //
-                    // S1         = qcur @ kcur.T
-                    // S2         = S1 * scale
-                    // S3         = diag_mask_inf(S2, P)
-                    // S4         = softmax(S3)
-                    // grad[S4]   = d[:D,id1,id2,id3] @ vcur
-                    // grad[S3]   = S4 * (grad[S4] - dot(S4, grad[S4]))
-                    // grad[S1]   = diag_mask_zero(grad[S3], P) * scale
-                    // grad[qcur] = grad[S1]   @ kcur
-                    // grad[kcur] = grad[S1].T @ qcur
-                    // grad[vcur] = d[:D,id1,id2,id3].T @ S4
-                    //
-                    // using less variables (SM=S4):
-                    //
-                    // S             = diag_mask_inf(qcur @ kcur.T * scale, P)
-                    // SM            = softmax(S)
-                    // S             = d[:D,iq1,iq2,iq3] @ vcur
-                    // dot_SM_gradSM = dot(SM, S)
-                    // S             = SM * (S - dot(SM, S))
-                    // S             = diag_mask_zero(S, P) * scale
-                    //
-                    // grad[q][:D,iq1,iq2,iq3] += S   @ kcur
-                    // grad[k][:D,:M,ik2,ik3]  += S.T @ qcur
-                    // grad[v][:M,:D,iv2,iv3]  += d[:D,id1,id2,id3].T @ SM
-                }
-
-                // S = gradSM = d[:D,id1,id2,id3] @ vcur[:,:,iv2,iv3]
-                // S = d[:D,id1,id2,id3] @ vcur[:,:,iv2,iv3]
-                // for ic:
-                //   S[:M] += vcur[:M,ic,iv2,iv3] * d[ic,id1,id2,id3]
-                // exclude known future zero S[..] values from operation
-                ggml_vec_set_f32(masked_begin, S, 0);
-                for (int64_t ic = 0; ic < D; ++ic) {
-                    ggml_vec_mad_f32(masked_begin,
-                            S,
-                             (float *) ((char *) v->data + (          ic*nbv1  + iv2*nbv2 + iv3*nbv3)),
-                            *(float *) ((char *) d->data + (ic*nbd0 + id1*nbd1 + id2*nbd2 + id3*nbd3)));
-                }
-
-                // S = SM * (S - dot(SM, S))
-                float dot_SM_gradSM = 0;
-                ggml_vec_dot_f32 (masked_begin, &dot_SM_gradSM, SM, S);
-                ggml_vec_acc1_f32(M, S, -dot_SM_gradSM);
-                ggml_vec_mul_f32 (masked_begin, S, S, SM);
-
-                // S = diag_mask_zero(S, P) * scale
-                // already done by above ggml_vec_set_f32
-
-                // exclude known zero S[..] values from operation
-                ggml_vec_scale_f32(masked_begin, S, scale);
-
-                // S    shape [M,1]
-                // SM   shape [M,1]
-                // kcur shape [D,M]
-                // qcur shape [D,1]
-                // vcur shape [M,D]
-
-                // grad[q][:D,iq1,iq2,iq3] += S @ kcur
-                // grad[q][:D,iq1,iq2,iq3] += shape[M,1] @ shape[D,M]
-                // for ic:
-                //  grad[q][:D,iq1,iq2,iq3] += S[ic] * kcur[:D,ic,ik2,ik3]
-                // exclude known zero S[..] values from loop
-                for (int64_t ic = 0; ic < masked_begin; ++ic) {
-                    ggml_vec_mad_f32(D,
-                            (float *) ((char *) grad_q  + (iq1*nbgq1 + iq2*nbgq2  + iq3*nbgq3)),
-                            (float *) ((char *) k->data + (ic*nbk1   + ik2*nbk2   + ik3*nbk3)),
-                            S[ic]);
-                }
-
-                // grad[k][:D,:M,iq2,iq3] += S.T @ qcur
-                // for ic:
-                //  grad[k][:D,ic,iq2,iq3] += S.T[0,ic] * qcur[:D,0]
-                //  grad[k][:D,ic,iq2,iq3] += S[ic]     * qcur[:D,0]
-                // exclude known zero S[..] values from loop
-                for (int64_t ic = 0; ic < masked_begin; ++ic) {
-                    ggml_vec_mad_f32(D,
-                            (float *) ((char *) grad_k  + (ic*nbgk1  + ik2*nbgk2  + ik3*nbgk3)),
-                            (float *) ((char *) q->data + (iq1*nbq1  + iq2*nbq2   + iq3*nbq3)),
-                            S[ic]);
-                }
-
-                // grad[v][:M,:D,iv2,iv3] += d[:D,id1,id2,id3].T       @ SM
-                // for ic:
-                //  grad[v][:M,ic,iv2,iv3] += d[:D,id1,id2,id3].T[0,ic] * SM[:M]
-                //  grad[v][:M,ic,iv2,iv3] += d[ic,id1,id2,id3]         * SM[:M]
-                // exclude known zero SM[..] values from mad
-                for (int64_t ic = 0; ic < D; ++ic) {
-                    ggml_vec_mad_f32(masked_begin,
-                            (float *) ((char *) grad_v   + (          ic*nbgv1 + iv2*nbgv2 + iv3*nbgv3)),
-                            SM,
-                            *(float *) ((char *) d->data + (ic*nbd0 + id1*nbd1 + id2*nbd2  + id3*nbd3)));
                 }
             }
         }
