@@ -18933,6 +18933,7 @@ struct ggml_cgraph ggml_graph_import(const char * fname, struct ggml_context ** 
 
 void ggml_graph_print(const struct ggml_cgraph * cgraph) {
     int64_t perf_total_per_op_us[GGML_OP_COUNT] = {0};
+    int64_t perf_total_per_op_flop[GGML_OP_COUNT] = {0};
 
     GGML_PRINT("=== GRAPH ===\n");
 
@@ -18941,6 +18942,13 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
         struct ggml_tensor * node = cgraph->nodes[i];
 
         perf_total_per_op_us[node->op] += MAX(1, node->perf_time_us);
+        if (node->op == GGML_OP_MUL_MAT) {
+            int64_t flop = node->ne[3]*node->ne[2]*node->ne[1]*node->ne[0]*(2*node->src[0]->ne[0]-1);
+            perf_total_per_op_flop[node->op] += flop;
+        } else if (node->op == GGML_OP_OUT_PROD) {
+            int64_t flop = node->ne[3]*node->ne[2]*node->ne[1]*node->ne[0]*(2*node->src[0]->ne[1]-1);
+            perf_total_per_op_flop[node->op] += flop;
+        }
 
         // GGML_PRINT(" - %3d: [ %5" PRId64 ", %5" PRId64 ", %5" PRId64 "] %16s %s (%3d) cpu = %7.3f / %7.3f ms, wall = %7.3f / %7.3f ms\n",
         //         i,
@@ -18967,7 +18975,10 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
             continue;
         }
 
-        GGML_PRINT("perf_total_per_op_us[%16s] = %7.3f ms\n", ggml_op_name(i), (double) perf_total_per_op_us[i] / 1000.0);
+        GGML_PRINT("perf_total_per_op_us[%16s] = %7.3f ms gigaflop=%7.3f gigaflop/s=[%7.3f]\n",
+            ggml_op_name(i), (double) perf_total_per_op_us[i] / 1000.0,
+            (double) perf_total_per_op_flop[i] / 1000000000.0,
+            (double) perf_total_per_op_flop[i] / (1000.0 * (double) perf_total_per_op_us[i]));
     }
 
     GGML_PRINT("========================================\n");
