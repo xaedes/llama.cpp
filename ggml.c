@@ -16271,11 +16271,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_MUL_MAT:
             {
-                ggml_compute_forward_mul_mat(params, tensor->src[0], tensor->src[1], tensor);
+                // ggml_compute_forward_mul_mat(params, tensor->src[0], tensor->src[1], tensor);
             } break;
         case GGML_OP_OUT_PROD:
             {
-                ggml_compute_forward_out_prod(params, tensor->src[0], tensor->src[1], tensor);
+                // ggml_compute_forward_out_prod(params, tensor->src[0], tensor->src[1], tensor);
             } break;
         case GGML_OP_SCALE:
             {
@@ -16382,7 +16382,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
                 const int32_t t = ggml_get_op_params_i32(tensor, 0);
                 GGML_ASSERT(t == 0 || t == 1);
                 const bool masked = t != 0;
-                ggml_compute_forward_flash_attn(params, tensor->src[0], tensor->src[1], tensor->src[2], masked, tensor);
+                // ggml_compute_forward_flash_attn(params, tensor->src[0], tensor->src[1], tensor->src[2], masked, tensor);
             } break;
         case GGML_OP_FLASH_FF:
             {
