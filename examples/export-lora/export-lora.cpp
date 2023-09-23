@@ -418,6 +418,7 @@ static void export_lora(struct export_lora_params * params) {
 
         if (i % 2 == 0) {
             printf(".");
+            fflush(stdout);
         }
     }
     printf("\n");
