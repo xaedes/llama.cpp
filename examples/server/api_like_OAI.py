@@ -20,6 +20,7 @@ parser.add_argument("--llama-api", type=str, help="Set the address of server.cpp
 parser.add_argument("--api-key", type=str, help="Set the api key to allow only few user(default: NULL)", default="")
 parser.add_argument("--host", type=str, help="Set the ip address to listen.(default: 127.0.0.1)", default='127.0.0.1')
 parser.add_argument("--port", type=int, help="Set the port to listen.(default: 8081)", default=8081)
+parser.add_argument("--log", type=str, help="Log file for prompts and responses.", default='log-oai.txt')
 
 args = parser.parse_args()
 
@@ -32,7 +33,9 @@ def is_present(json, key):
         return False
     return True
 
-
+def write_log(text):
+    with open(args.log, "a", encoding="utf-8") as logfile:
+        logfile.write(text)
 
 #convert chat to prompt
 def convert_chat(messages):
@@ -358,9 +361,13 @@ def chat_completions():
     if(is_present(body, "function_call")): function_call = body["function_call"]
     if(is_present(body, "functions") and function_call is None): function_call = "auto"
 
+
     if function_call == "auto":
+        write_log("\n<BEGIN_COMPLETION>\n")
+        write_log(postDataDecide['prompt'])
         postDataDecide = make_postData(body, chat=True, stream=False, function_call=function_call)
         dataDecide = requests.request("POST", urllib.parse.urljoin(args.llama_api, "/completion"), data=json.dumps(postDataDecide))
+        write_log(dataDecide.content)
         decision = json.loads(dataDecide.content)
         decision = json.loads(decision['content'])
         if decision["decision"] == "message":
@@ -376,12 +383,17 @@ def chat_completions():
         promptToken = tokenData["tokens"]
 
     if (not stream):
+        write_log("\n<BEGIN_COMPLETION>\n")
+        write_log(postData['prompt'])
         data = requests.request("POST", urllib.parse.urljoin(args.llama_api, "/completion"), data=json.dumps(postData))
         print(data.json())
+        write_log(data.json()['content'])
         resData = make_resData(data.json(), chat=True, promptToken=promptToken, function_call=function_call)
         return jsonify(resData)
     else:
         def generate():
+            write_log("\n<BEGIN_COMPLETION>\n")
+            write_log(postData['prompt'])
             data = requests.request("POST", urllib.parse.urljoin(args.llama_api, "/completion"), data=json.dumps(postData), stream=True)
             time_now = int(time.time())
             resData = make_resData_stream({}, chat=True, time_now=time_now, start=True, function_call=function_call)
@@ -389,6 +401,7 @@ def chat_completions():
             for line in data.iter_lines():
                 if line:
                     decoded_line = line.decode('utf-8')
+                    write_log(json.loads(decoded_line[6:])['content'])
                     resData = make_resData_stream(json.loads(decoded_line[6:]), chat=True, time_now=time_now, function_call=function_call)
                     yield 'data: {}\n'.format(json.dumps(resData))
         return Response(generate(), mimetype='text/event-stream')
@@ -412,17 +425,23 @@ def completion():
         promptToken = tokenData["tokens"]
 
     if (not stream):
+        write_log("\n<BEGIN_COMPLETION>\n")
+        write_log(postData['prompt'])
         data = requests.request("POST", urllib.parse.urljoin(args.llama_api, "/completion"), data=json.dumps(postData))
         print(data.json())
+        write_log(data.json()['content'])
         resData = make_resData(data.json(), chat=False, promptToken=promptToken)
         return jsonify(resData)
     else:
         def generate():
+            write_log("\n<BEGIN_COMPLETION>\n")
+            write_log(postData['prompt'])
             data = requests.request("POST", urllib.parse.urljoin(args.llama_api, "/completion"), data=json.dumps(postData), stream=True)
             time_now = int(time.time())
             for line in data.iter_lines():
                 if line:
                     decoded_line = line.decode('utf-8')
+                    write_log(json.loads(decoded_line[6:])['content'])
                     resData = make_resData_stream(json.loads(decoded_line[6:]), chat=False, time_now=time_now)
                     yield 'data: {}\n'.format(json.dumps(resData))
         return Response(generate(), mimetype='text/event-stream')
